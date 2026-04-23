@@ -1,0 +1,193 @@
+import React, { useEffect, useState } from 'react'
+import { useAppStore } from '../stores/useAppStore'
+import { cn, AI_TYPE_LIST } from '../utils/helpers'
+import { Settings, Save, Brain, Mail, Server } from 'lucide-react'
+import { motion } from 'framer-motion'
+
+const SettingsPage: React.FC = () => {
+  const { config, fetchConfig, saveConfig } = useAppStore()
+  const [activeTab, setActiveTab] = useState('ai')
+  const [aiType, setAiType] = useState('TONGYI')
+  const [aiUrl, setAiUrl] = useState('')
+  const [aiModel, setAiModel] = useState('')
+  const [aiApiKey, setAiApiKey] = useState('')
+  const [apiQueUrl, setApiQueUrl] = useState('http://localhost:8083')
+  const [completionTone, setCompletionTone] = useState(1)
+  const [logLevel, setLogLevel] = useState('INFO')
+  const [emailSw, setEmailSw] = useState(0)
+  const [smtpHost, setSmtpHost] = useState('')
+  const [smtpPort, setSmtpPort] = useState(465)
+  const [emailUser, setEmailUser] = useState('')
+  const [emailPass, setEmailPass] = useState('')
+  const [saving, setSaving] = useState(false)
+
+  useEffect(() => { fetchConfig() }, [])
+
+  useEffect(() => {
+    if (config) {
+      setAiType(config.setting?.aiSetting?.aiType || 'TONGYI')
+      setAiUrl(config.setting?.aiSetting?.aiUrl || '')
+      setAiModel(config.setting?.aiSetting?.model || '')
+      setAiApiKey(config.setting?.aiSetting?.API_KEY || '')
+      setApiQueUrl(config.setting?.apiQueSetting?.url || 'http://localhost:8083')
+      setCompletionTone(config.setting?.basicSetting?.completionTone ?? 1)
+      setLogLevel(config.setting?.basicSetting?.logLevel || 'INFO')
+      setEmailSw(config.setting?.emailInform?.sw ?? 0)
+      setSmtpHost(config.setting?.emailInform?.smtpHost || '')
+      setSmtpPort(config.setting?.emailInform?.smtpPort || 465)
+      setEmailUser(config.setting?.emailInform?.userName || '')
+      setEmailPass(config.setting?.emailInform?.password || '')
+    }
+  }, [config])
+
+  const handleSave = async () => {
+    setSaving(true)
+    try {
+      const cfg = {
+        setting: {
+          basicSetting: { completionTone, logLevel, colorLog: 1, logOutFileSw: 1, logModel: 0 },
+          aiSetting: { aiType, aiUrl, model: aiModel, API_KEY: aiApiKey },
+          apiQueSetting: { url: apiQueUrl },
+          emailInform: { sw: emailSw, smtpHost, smtpPort, userName: emailUser, password: emailPass },
+        },
+        users: [],
+      }
+      await saveConfig(JSON.stringify(cfg))
+    } catch (e) { console.error('保存配置失败:', e) }
+    setSaving(false)
+  }
+
+  const tabs = [
+    { id: 'ai', label: 'AI答题配置', icon: Brain },
+    { id: 'basic', label: '基本设置', icon: Settings },
+    { id: 'email', label: '邮件通知', icon: Mail },
+    { id: 'api', label: 'API配置', icon: Server },
+  ]
+
+  return (
+    <div className="p-6 space-y-6">
+      <div className="flex items-center justify-between">
+        <div>
+          <h1 className="text-2xl font-bold text-dark-50">系统设置</h1>
+          <p className="text-sm text-dark-400 mt-1">AI答题 / 通知 / 日志</p>
+        </div>
+        <button onClick={handleSave} disabled={saving} className={cn("btn-primary flex items-center gap-2", saving && "opacity-50")}>
+          <Save size={14} />{saving ? '保存中...' : '保存配置'}
+        </button>
+      </div>
+
+      <div className="flex gap-6">
+        <div className="w-48 space-y-1">
+          {tabs.map(tab => (
+            <button key={tab.id} onClick={() => setActiveTab(tab.id)} className={cn("sidebar-item w-full", activeTab === tab.id && "sidebar-item-active")}>
+              <tab.icon size={16} />
+              <span>{tab.label}</span>
+            </button>
+          ))}
+        </div>
+
+        <div className="flex-1">
+          <motion.div key={activeTab} initial={{ opacity:0, x:10 }} animate={{ opacity:1, x:0 }} className="glass-card p-6 space-y-5">
+            {activeTab === 'ai' && (
+              <div className="space-y-4">
+                <h3 className="text-lg font-semibold text-dark-100">AI答题配置</h3>
+                <div>
+                  <label className="text-xs font-medium text-dark-300 mb-1.5 block">AI平台类型</label>
+                  <select value={aiType} onChange={e => setAiType(e.target.value)} className="select-field">
+                    {AI_TYPE_LIST.map(t => <option key={t.id} value={t.id}>{t.name}</option>)}
+                  </select>
+                </div>
+                <div>
+                  <label className="text-xs font-medium text-dark-300 mb-1.5 block">AI API地址</label>
+                  <input type="text" value={aiUrl} onChange={e => setAiUrl(e.target.value)} placeholder="自定义API地址（选填）" className="input-field" />
+                  <p className="text-xs text-dark-500 mt-1">仅在使用"其他"或自定义URL时填写</p>
+                </div>
+                <div>
+                  <label className="text-xs font-medium text-dark-300 mb-1.5 block">模型名称</label>
+                  <input type="text" value={aiModel} onChange={e => setAiModel(e.target.value)} placeholder="如：qwen-turbo, gpt-3.5-turbo" className="input-field" />
+                </div>
+                <div>
+                  <label className="text-xs font-medium text-dark-300 mb-1.5 block">API密钥</label>
+                  <input type="password" value={aiApiKey} onChange={e => setAiApiKey(e.target.value)} placeholder="请输入API KEY" className="input-field" />
+                  <p className="text-xs text-dark-500 mt-1">密钥将保存在本地配置文件中</p>
+                </div>
+              </div>
+            )}
+
+            {activeTab === 'basic' && (
+              <div className="space-y-4">
+                <h3 className="text-lg font-semibold text-dark-100">基本设置</h3>
+                <div className="flex items-center justify-between p-3 rounded-lg bg-dark-800/30">
+                  <div>
+                    <p className="text-sm font-medium text-dark-200">完成提示音</p>
+                    <p className="text-xs text-dark-500">任务完成时播放提示音</p>
+                  </div>
+                  <button onClick={() => setCompletionTone(completionTone === 1 ? 0 : 1)} className={cn("w-10 h-5 rounded-full transition-colors relative", completionTone === 1 ? "bg-accent-600" : "bg-dark-600")}>
+                    <div className={cn("w-4 h-4 rounded-full bg-white absolute top-0.5 transition-transform", completionTone === 1 ? "translate-x-5" : "translate-x-0.5")} />
+                  </button>
+                </div>
+                <div>
+                  <label className="text-xs font-medium text-dark-300 mb-1.5 block">日志级别</label>
+                  <select value={logLevel} onChange={e => setLogLevel(e.target.value)} className="select-field">
+                    <option value="DEBUG">调试 (DEBUG)</option>
+                    <option value="INFO">信息 (INFO)</option>
+                    <option value="WARN">警告 (WARN)</option>
+                    <option value="ERROR">错误 (ERROR)</option>
+                  </select>
+                </div>
+              </div>
+            )}
+
+            {activeTab === 'email' && (
+              <div className="space-y-4">
+                <h3 className="text-lg font-semibold text-dark-100">邮件通知</h3>
+                <div className="flex items-center justify-between p-3 rounded-lg bg-dark-800/30">
+                  <div>
+                    <p className="text-sm font-medium text-dark-200">启用邮件通知</p>
+                    <p className="text-xs text-dark-500">任务完成后发送邮件提醒</p>
+                  </div>
+                  <button onClick={() => setEmailSw(emailSw === 1 ? 0 : 1)} className={cn("w-10 h-5 rounded-full transition-colors relative", emailSw === 1 ? "bg-accent-600" : "bg-dark-600")}>
+                    <div className={cn("w-4 h-4 rounded-full bg-white absolute top-0.5 transition-transform", emailSw === 1 ? "translate-x-5" : "translate-x-0.5")} />
+                  </button>
+                </div>
+                {emailSw === 1 && (
+                  <>
+                    <div>
+                      <label className="text-xs font-medium text-dark-300 mb-1.5 block">SMTP服务器</label>
+                      <input type="text" value={smtpHost} onChange={e => setSmtpHost(e.target.value)} placeholder="如：smtp.qq.com" className="input-field" />
+                    </div>
+                    <div>
+                      <label className="text-xs font-medium text-dark-300 mb-1.5 block">SMTP端口</label>
+                      <input type="number" value={smtpPort} onChange={e => setSmtpPort(Number(e.target.value))} className="input-field" />
+                    </div>
+                    <div>
+                      <label className="text-xs font-medium text-dark-300 mb-1.5 block">邮箱账号</label>
+                      <input type="text" value={emailUser} onChange={e => setEmailUser(e.target.value)} placeholder="your@email.com" className="input-field" />
+                    </div>
+                    <div>
+                      <label className="text-xs font-medium text-dark-300 mb-1.5 block">授权码</label>
+                      <input type="password" value={emailPass} onChange={e => setEmailPass(e.target.value)} placeholder="邮箱授权码或密码" className="input-field" />
+                    </div>
+                  </>
+                )}
+              </div>
+            )}
+
+            {activeTab === 'api' && (
+              <div className="space-y-4">
+                <h3 className="text-lg font-semibold text-dark-100">API配置</h3>
+                <div>
+                  <label className="text-xs font-medium text-dark-300 mb-1.5 block">外置题库服务URL</label>
+                  <input type="text" value={apiQueUrl} onChange={e => setApiQueUrl(e.target.value)} placeholder="http://localhost:8083" className="input-field" />
+                  <p className="text-xs text-dark-500 mt-1">外置题库服务的访问地址，用于自动考试功能</p>
+                </div>
+              </div>
+            )}
+          </motion.div>
+        </div>
+      </div>
+    </div>
+  )
+}
+
+export default SettingsPage

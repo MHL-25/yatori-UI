@@ -1,0 +1,9 @@
+build/bin/
+frontend/dist/
+frontend/node_modules/
+成品/
+*.exe
+*.db
+*.yaml
+!build/windows/
+!build/darwin/
