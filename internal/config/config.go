@@ -40,15 +40,23 @@ type AiSetting struct {
 	APIKEY string       `json:"API_KEY" yaml:"API_KEY" mapstructure:"API_KEY"`
 }
 
+type VisionAiSetting struct {
+	AiType ctype.AiType `json:"aiType" yaml:"aiType"`
+	AiUrl  string       `json:"aiUrl" yaml:"aiUrl"`
+	Model  string       `json:"model"`
+	APIKEY string       `json:"API_KEY" yaml:"API_KEY" mapstructure:"API_KEY"`
+}
+
 type ApiQueSetting struct {
 	Url string `json:"url"`
 }
 
 type Setting struct {
-	BasicSetting  BasicSetting  `json:"basicSetting" yaml:"basicSetting"`
-	EmailInform   EmailInform   `json:"emailInform" yaml:"emailInform"`
-	AiSetting     AiSetting     `json:"aiSetting" yaml:"aiSetting"`
-	ApiQueSetting ApiQueSetting `json:"apiQueSetting" yaml:"apiQueSetting"`
+	BasicSetting    BasicSetting    `json:"basicSetting" yaml:"basicSetting"`
+	EmailInform     EmailInform     `json:"emailInform" yaml:"emailInform"`
+	AiSetting       AiSetting       `json:"aiSetting" yaml:"aiSetting"`
+	VisionAiSetting VisionAiSetting `json:"visionAiSetting" yaml:"visionAiSetting"`
+	ApiQueSetting   ApiQueSetting   `json:"apiQueSetting" yaml:"apiQueSetting"`
 }
 
 type CoursesSettings struct {

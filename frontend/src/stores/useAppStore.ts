@@ -31,6 +31,7 @@ interface AppConfig {
   setting: {
     basicSetting: { completionTone: number; colorLog: number; logOutFileSw: number; logLevel: string; logModel: number }
     aiSetting: { aiType: string; aiUrl: string; model: string; API_KEY: string }
+    visionAiSetting: { aiType: string; aiUrl: string; model: string; API_KEY: string }
     apiQueSetting: { url: string }
     emailInform: { sw: number; smtpHost: string; smtpPort: number; userName: string; password: string }
   }

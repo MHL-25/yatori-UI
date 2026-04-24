@@ -53,6 +53,20 @@ const DisclaimerModal: React.FC<DisclaimerModalProps> = ({ onAccept, readOnly, o
               </a>
               如有问题欢迎联系我会进行修改。
             </p>
+            <p>
+              群聊：<a href="https://qun.qq.com/universal-share/share?ac=1&authKey=Wwi3jpZXkgm6wkjnxzOxAHp94fekV16hiwB513WmVeWntdyYMCmZcF7MAxRegbFR&busi_data=eyJncm91cENvZGUiOiIyMTMyNDYxNjQiLCJ0b2tlbiI6InVyMUowRHdaeHMrNHR0cDI5OG1lb1FtT1RWZUpYaVZGcDZRdU5laXVIQnVNS1hJN0g3SEswQUhwNk5qSGR1SmUiLCJ1aW4iOiIyODQ0MTg5MjI4In0%3D&data=oM6AeBGUD-qHiWshlmElnCBhYbDN33jrBXSRaNlOBmztBy7Bx0Sa7dbeoKSRdKzcgUoQjrjSrq5qQVnBA4_W8g&svctype=4&tempid=h5_group_info" target="_blank" rel="noopener noreferrer" className="text-blue-400 underline hover:text-blue-300">213246164</a>（点击加入交流群）
+            </p>
+          </div>
+
+          <div className="border-t border-dark-700 pt-4">
+            <h3 className="text-green-400 font-bold text-base mb-3">📋 v1.0.5 更新内容</h3>
+            <ul className="list-disc list-inside space-y-1.5 text-dark-300">
+              <li>新增识图模型配置：支持配置视觉AI模型，自动识别题目中的图片进行答题</li>
+              <li>新增双模型配置界面：纯文本模型（必填）+ 识图模型（选填），含图片题目自动使用识图模型</li>
+              <li>修复多任务点模式下视频不观看的问题：增加视频卡片获取重试机制和视频信息获取重试机制</li>
+              <li>优化视频播放日志：增加视频开始观看、已完成、跳过等状态提示</li>
+              <li>视觉AI降级策略：识图模型失败时自动降级为纯文本模型答题</li>
+            </ul>
           </div>
 
           <div className="border-t border-dark-700 pt-4">

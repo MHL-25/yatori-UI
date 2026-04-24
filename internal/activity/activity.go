@@ -1,4 +1,4 @@
-﻿package activity
+package activity
 
 import (
 	"encoding/json"
@@ -435,17 +435,28 @@ func (a *XXTActivity) nodeRun(setting config.Setting, cache *xuexitongApi.XueXiT
 			}
 			card, enc, err2 := xuexitong.PageMobileChapterCardAction(cache, key, courseId, videoDTO.KnowledgeID, videoDTO.CardIndex, courseItem.Cpi)
 			if err2 != nil {
-				monitor.GlobalEventBus.AddLog(a.Uid, "卡片错误: "+err2.Error())
-				continue
+				monitor.GlobalEventBus.AddLog(a.Uid, "视频卡片获取失败，重试中: "+err2.Error())
+				time.Sleep(3 * time.Second)
+				card, enc, err2 = xuexitong.PageMobileChapterCardAction(cache, key, courseId, videoDTO.KnowledgeID, videoDTO.CardIndex, courseItem.Cpi)
+				if err2 != nil {
+					monitor.GlobalEventBus.AddLog(a.Uid, "视频卡片重试仍失败: "+err2.Error())
+					continue
+				}
 			}
 			videoDTO.AttachmentsDetection(card)
 			if !videoDTO.IsJob {
+				monitor.GlobalEventBus.AddLog(a.Uid, fmt.Sprintf("非任务点视频，跳过: %s", videoDTO.Title))
 				continue
 			}
 			videoDTO.Enc = enc
-			if videoDTO.IsPassed && !videoDTO.IsJob {
+			if videoDTO.IsPassed {
+				monitor.GlobalEventBus.AddLog(a.Uid, fmt.Sprintf("视频已完成，跳过: %s", videoDTO.Title))
 				continue
 			}
+			if !videoDTO.IsPassed && videoDTO.Attachment == nil && videoDTO.JobID == "" && videoDTO.Duration <= videoDTO.PlayTime {
+				continue
+			}
+			monitor.GlobalEventBus.AddLog(a.Uid, fmt.Sprintf("开始观看视频: %s (%d/%ds)", videoDTO.Title, videoDTO.PlayTime, videoDTO.Duration))
 			if videoDTO.Type == ctype.Video {
 				a.executeVideo(cache, courseItem, pointAction.Knowledge[index], &videoDTO, key, courseItem.Cpi)
 			} else if videoDTO.Type == ctype.InsertAudio {
@@ -566,7 +577,24 @@ func (a *XXTActivity) nodeRun(setting config.Setting, cache *xuexitongApi.XueXiT
 }
 
 func (a *XXTActivity) executeVideo(cache *xuexitongApi.XueXiTUserCache, courseItem *xuexitong.XueXiTCourse, knowledgeItem xuexitong.KnowledgeItem, p *xuexitongApi.PointVideoDto, key, courseCpi int) {
-	if state, _ := xuexitong.VideoDtoFetchAction(cache, p); state {
+	state, fetchErr := xuexitong.VideoDtoFetchAction(cache, p)
+	if !state {
+		if fetchErr != nil {
+			monitor.GlobalEventBus.AddLog(a.Uid, fmt.Sprintf("视频信息获取失败，重试: %s - %s", p.Title, fetchErr.Error()))
+		}
+		time.Sleep(3 * time.Second)
+		xuexitong.ReLogin(cache)
+		state, fetchErr = xuexitong.VideoDtoFetchAction(cache, p)
+		if !state {
+			if fetchErr != nil {
+				monitor.GlobalEventBus.AddLog(a.Uid, fmt.Sprintf("视频信息重试仍失败: %s - %s", p.Title, fetchErr.Error()))
+			} else {
+				monitor.GlobalEventBus.AddLog(a.Uid, fmt.Sprintf("视频信息获取失败(状态异常): %s", p.Title))
+			}
+			return
+		}
+	}
+	{
 		playingTime := p.PlayTime
 		if !p.IsPassed && p.PlayTime == p.Duration {
 			playingTime = 0
@@ -654,7 +682,22 @@ func (a *XXTActivity) executeVideo(cache *xuexitongApi.XueXiTUserCache, courseIt
 }
 
 func (a *XXTActivity) executeAudio(cache *xuexitongApi.XueXiTUserCache, courseItem *xuexitong.XueXiTCourse, knowledgeItem xuexitong.KnowledgeItem, p *xuexitongApi.PointVideoDto, key, courseCpi int) {
-	if state, _ := xuexitong.VideoDtoFetchAction(cache, p); state {
+	state, fetchErr := xuexitong.VideoDtoFetchAction(cache, p)
+	if !state {
+		if fetchErr != nil {
+			monitor.GlobalEventBus.AddLog(a.Uid, fmt.Sprintf("音频信息获取失败，重试: %s - %s", p.Title, fetchErr.Error()))
+		}
+		time.Sleep(3 * time.Second)
+		xuexitong.ReLogin(cache)
+		state, fetchErr = xuexitong.VideoDtoFetchAction(cache, p)
+		if !state {
+			if fetchErr != nil {
+				monitor.GlobalEventBus.AddLog(a.Uid, fmt.Sprintf("音频信息重试仍失败: %s - %s", p.Title, fetchErr.Error()))
+			}
+			return
+		}
+	}
+	{
 		playingTime := p.PlayTime
 		if !p.IsPassed && p.PlayTime == p.Duration {
 			playingTime = 0
@@ -855,7 +898,7 @@ func (a *XXTActivity) workAction(cache *xuexitongApi.XueXiTUserCache, work xuexi
 			continue
 		}
 		if user.CoursesCustom.AutoExam == 1 {
-			question.WriteQuestionForAIAction(cache, setting.AiSetting.AiUrl, setting.AiSetting.Model, setting.AiSetting.AiType, setting.AiSetting.APIKEY)
+			question.WriteQuestionForAIAction(cache, setting.AiSetting.AiUrl, setting.AiSetting.Model, setting.AiSetting.AiType, setting.AiSetting.APIKEY, setting.VisionAiSetting.AiUrl, setting.VisionAiSetting.Model, setting.VisionAiSetting.AiType, setting.VisionAiSetting.APIKEY)
 		} else if user.CoursesCustom.AutoExam == 2 {
 			question.WriteQuestionForExternalAction(setting.ApiQueSetting.Url)
 		} else if user.CoursesCustom.AutoExam == 3 {
@@ -884,7 +927,7 @@ func (a *XXTActivity) examAction(cache *xuexitongApi.XueXiTUserCache, exam xuexi
 			continue
 		}
 		if user.CoursesCustom.AutoExam == 1 {
-			question.WriteQuestionForAIAction(cache, setting.AiSetting.AiUrl, setting.AiSetting.Model, setting.AiSetting.AiType, setting.AiSetting.APIKEY)
+			question.WriteQuestionForAIAction(cache, setting.AiSetting.AiUrl, setting.AiSetting.Model, setting.AiSetting.AiType, setting.AiSetting.APIKEY, setting.VisionAiSetting.AiUrl, setting.VisionAiSetting.Model, setting.VisionAiSetting.AiType, setting.VisionAiSetting.APIKEY)
 		} else if user.CoursesCustom.AutoExam == 2 {
 			question.WriteQuestionForExternalAction(setting.ApiQueSetting.Url)
 		} else if user.CoursesCustom.AutoExam == 3 {
@@ -1191,7 +1234,7 @@ func (a *YingHuaActivity) workAction(cache *yinghuaApi.YingHuaUserCache, course 
 		var err error
 		switch user.CoursesCustom.AutoExam {
 		case 1:
-			err = yinghua.StartWorkAction(cache, work, setting.AiSetting.AiUrl, setting.AiSetting.Model, setting.AiSetting.APIKEY, setting.AiSetting.AiType, user.CoursesCustom.ExamAutoSubmit)
+			err = yinghua.StartWorkAction(cache, work, setting.AiSetting.AiUrl, setting.AiSetting.Model, setting.AiSetting.APIKEY, setting.AiSetting.AiType, user.CoursesCustom.ExamAutoSubmit, setting.VisionAiSetting.AiUrl, setting.VisionAiSetting.Model, setting.VisionAiSetting.AiType, setting.VisionAiSetting.APIKEY)
 		case 2:
 			err = yinghua.StartWorkForExternalAction(cache, setting.ApiQueSetting.Url, work, user.CoursesCustom.ExamAutoSubmit)
 		}
@@ -1213,7 +1256,7 @@ func (a *YingHuaActivity) examAction(cache *yinghuaApi.YingHuaUserCache, course 
 		var err error
 		switch user.CoursesCustom.AutoExam {
 		case 1:
-			err = yinghua.StartExamAction(cache, exam, setting.AiSetting.AiUrl, setting.AiSetting.Model, setting.AiSetting.APIKEY, setting.AiSetting.AiType, user.CoursesCustom.ExamAutoSubmit)
+			err = yinghua.StartExamAction(cache, exam, setting.AiSetting.AiUrl, setting.AiSetting.Model, setting.AiSetting.APIKEY, setting.AiSetting.AiType, user.CoursesCustom.ExamAutoSubmit, setting.VisionAiSetting.AiUrl, setting.VisionAiSetting.Model, setting.VisionAiSetting.AiType, setting.VisionAiSetting.APIKEY)
 		case 2:
 			err = yinghua.StartExamForExternalAction(cache, exam, setting.ApiQueSetting.Url, user.CoursesCustom.ExamAutoSubmit)
 		}

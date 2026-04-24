@@ -1,7 +1,7 @@
 import React, { useEffect, useState } from 'react'
 import { useAppStore } from '../stores/useAppStore'
 import { cn, AI_TYPE_LIST, APP_VERSION } from '../utils/helpers'
-import { Settings, Save, Brain, Mail, Server, Info, ExternalLink } from 'lucide-react'
+import { Settings, Save, Brain, Mail, Server, Info, ExternalLink, Eye, FileText } from 'lucide-react'
 import { motion } from 'framer-motion'
 
 const SettingsPage: React.FC = () => {
@@ -11,6 +11,10 @@ const SettingsPage: React.FC = () => {
   const [aiUrl, setAiUrl] = useState('')
   const [aiModel, setAiModel] = useState('')
   const [aiApiKey, setAiApiKey] = useState('')
+  const [visionAiType, setVisionAiType] = useState('TONGYI')
+  const [visionAiUrl, setVisionAiUrl] = useState('')
+  const [visionAiModel, setVisionAiModel] = useState('')
+  const [visionAiApiKey, setVisionAiApiKey] = useState('')
   const [apiQueUrl, setApiQueUrl] = useState('http://localhost:8083')
   const [completionTone, setCompletionTone] = useState(1)
   const [logLevel, setLogLevel] = useState('INFO')
@@ -29,6 +33,10 @@ const SettingsPage: React.FC = () => {
       setAiUrl(config.setting?.aiSetting?.aiUrl || '')
       setAiModel(config.setting?.aiSetting?.model || '')
       setAiApiKey(config.setting?.aiSetting?.API_KEY || '')
+      setVisionAiType(config.setting?.visionAiSetting?.aiType || 'TONGYI')
+      setVisionAiUrl(config.setting?.visionAiSetting?.aiUrl || '')
+      setVisionAiModel(config.setting?.visionAiSetting?.model || '')
+      setVisionAiApiKey(config.setting?.visionAiSetting?.API_KEY || '')
       setApiQueUrl(config.setting?.apiQueSetting?.url || 'http://localhost:8083')
       setCompletionTone(config.setting?.basicSetting?.completionTone ?? 1)
       setLogLevel(config.setting?.basicSetting?.logLevel || 'INFO')
@@ -47,6 +55,7 @@ const SettingsPage: React.FC = () => {
         setting: {
           basicSetting: { completionTone, logLevel, colorLog: 1, logOutFileSw: 1, logModel: 0 },
           aiSetting: { aiType, aiUrl, model: aiModel, API_KEY: aiApiKey },
+          visionAiSetting: { aiType: visionAiType, aiUrl: visionAiUrl, model: visionAiModel, API_KEY: visionAiApiKey },
           apiQueSetting: { url: apiQueUrl },
           emailInform: { sw: emailSw, smtpHost, smtpPort, userName: emailUser, password: emailPass },
         },
@@ -90,27 +99,76 @@ const SettingsPage: React.FC = () => {
         <div className="flex-1">
           <motion.div key={activeTab} initial={{ opacity:0, x:10 }} animate={{ opacity:1, x:0 }} className="glass-card p-6 space-y-5">
             {activeTab === 'ai' && (
-              <div className="space-y-4">
-                <h3 className="text-lg font-semibold text-dark-100">AI答题配置</h3>
+              <div className="space-y-6">
                 <div>
-                  <label className="text-xs font-medium text-dark-300 mb-1.5 block">AI平台类型</label>
-                  <select value={aiType} onChange={e => setAiType(e.target.value)} className="select-field">
-                    {AI_TYPE_LIST.map(t => <option key={t.id} value={t.id}>{t.name}</option>)}
-                  </select>
+                  <h3 className="text-lg font-semibold text-dark-100 flex items-center gap-2">
+                    <FileText size={18} className="text-accent-400" />
+                    AI答题配置
+                  </h3>
+                  <p className="text-xs text-dark-500 mt-1">配置两个AI模型：纯文本模型用于普通题目，识图模型用于含图片的题目</p>
                 </div>
-                <div>
-                  <label className="text-xs font-medium text-dark-300 mb-1.5 block">AI API地址</label>
-                  <input type="text" value={aiUrl} onChange={e => setAiUrl(e.target.value)} placeholder="自定义API地址（选填）" className="input-field" />
-                  <p className="text-xs text-dark-500 mt-1">仅在使用"其他"或自定义URL时填写</p>
+
+                <div className="p-4 rounded-lg bg-dark-800/30 border border-dark-700/50 space-y-4">
+                  <div className="flex items-center gap-2 mb-2">
+                    <FileText size={16} className="text-blue-400" />
+                    <h4 className="text-sm font-semibold text-dark-200">纯文本模型（必填）</h4>
+                  </div>
+                  <p className="text-xs text-dark-500 -mt-2 ml-6">用于处理纯文字题目，如选择题、判断题等</p>
+                  <div>
+                    <label className="text-xs font-medium text-dark-300 mb-1.5 block">AI平台类型</label>
+                    <select value={aiType} onChange={e => setAiType(e.target.value)} className="select-field">
+                      {AI_TYPE_LIST.map(t => <option key={t.id} value={t.id}>{t.name}</option>)}
+                    </select>
+                  </div>
+                  <div>
+                    <label className="text-xs font-medium text-dark-300 mb-1.5 block">AI API地址</label>
+                    <input type="text" value={aiUrl} onChange={e => setAiUrl(e.target.value)} placeholder="自定义API地址（选填）" className="input-field" />
+                    <p className="text-xs text-dark-500 mt-1">仅在使用"其他"或自定义URL时填写</p>
+                  </div>
+                  <div>
+                    <label className="text-xs font-medium text-dark-300 mb-1.5 block">模型名称</label>
+                    <input type="text" value={aiModel} onChange={e => setAiModel(e.target.value)} placeholder="如：qwen-turbo, gpt-3.5-turbo" className="input-field" />
+                  </div>
+                  <div>
+                    <label className="text-xs font-medium text-dark-300 mb-1.5 block">API密钥</label>
+                    <input type="password" value={aiApiKey} onChange={e => setAiApiKey(e.target.value)} placeholder="请输入API KEY" className="input-field" />
+                    <p className="text-xs text-dark-500 mt-1">密钥将保存在本地配置文件中</p>
+                  </div>
                 </div>
-                <div>
-                  <label className="text-xs font-medium text-dark-300 mb-1.5 block">模型名称</label>
-                  <input type="text" value={aiModel} onChange={e => setAiModel(e.target.value)} placeholder="如：qwen-turbo, gpt-3.5-turbo" className="input-field" />
+
+                <div className="p-4 rounded-lg bg-dark-800/30 border border-dark-700/50 space-y-4">
+                  <div className="flex items-center gap-2 mb-2">
+                    <Eye size={16} className="text-purple-400" />
+                    <h4 className="text-sm font-semibold text-dark-200">识图模型（选填）</h4>
+                  </div>
+                  <p className="text-xs text-dark-500 -mt-2 ml-6">用于处理含图片的题目，如数学公式图、图表题等。若未配置，含图片的题目将降级使用纯文本模型</p>
+                  <div>
+                    <label className="text-xs font-medium text-dark-300 mb-1.5 block">AI平台类型</label>
+                    <select value={visionAiType} onChange={e => setVisionAiType(e.target.value)} className="select-field">
+                      {AI_TYPE_LIST.filter(t => t.id !== 'METAAI').map(t => <option key={t.id} value={t.id}>{t.name}</option>)}
+                    </select>
+                    <p className="text-xs text-dark-500 mt-1">推荐使用支持视觉能力的模型，如通义千问(qwen-vl)、GPT-4o等</p>
+                  </div>
+                  <div>
+                    <label className="text-xs font-medium text-dark-300 mb-1.5 block">AI API地址</label>
+                    <input type="text" value={visionAiUrl} onChange={e => setVisionAiUrl(e.target.value)} placeholder="自定义API地址（选填）" className="input-field" />
+                  </div>
+                  <div>
+                    <label className="text-xs font-medium text-dark-300 mb-1.5 block">模型名称</label>
+                    <input type="text" value={visionAiModel} onChange={e => setVisionAiModel(e.target.value)} placeholder="如：qwen-vl-plus, gpt-4o" className="input-field" />
+                    <p className="text-xs text-dark-500 mt-1">请填写支持图片识别的视觉模型名称</p>
+                  </div>
+                  <div>
+                    <label className="text-xs font-medium text-dark-300 mb-1.5 block">API密钥</label>
+                    <input type="password" value={visionAiApiKey} onChange={e => setVisionAiApiKey(e.target.value)} placeholder="请输入API KEY（选填）" className="input-field" />
+                    <p className="text-xs text-dark-500 mt-1">可与纯文本模型使用同一密钥（若平台相同）</p>
+                  </div>
                 </div>
-                <div>
-                  <label className="text-xs font-medium text-dark-300 mb-1.5 block">API密钥</label>
-                  <input type="password" value={aiApiKey} onChange={e => setAiApiKey(e.target.value)} placeholder="请输入API KEY" className="input-field" />
-                  <p className="text-xs text-dark-500 mt-1">密钥将保存在本地配置文件中</p>
+
+                <div className="p-3 rounded-lg bg-accent-900/20 border border-accent-700/30">
+                  <p className="text-xs text-accent-300">
+                    💡 提示：识图模型为可选配置。若不配置识图模型，遇到含图片的题目时将自动使用纯文本模型作答（图片内容将被忽略）。配置识图模型后可显著提升含图题目的准确率。
+                  </p>
                 </div>
               </div>
             )}
