@@ -1,7 +1,7 @@
 import React, { useEffect, useState } from 'react'
 import { useAppStore } from '../stores/useAppStore'
-import { cn, AI_TYPE_LIST } from '../utils/helpers'
-import { Settings, Save, Brain, Mail, Server } from 'lucide-react'
+import { cn, AI_TYPE_LIST, APP_VERSION } from '../utils/helpers'
+import { Settings, Save, Brain, Mail, Server, Info, ExternalLink } from 'lucide-react'
 import { motion } from 'framer-motion'
 
 const SettingsPage: React.FC = () => {
@@ -52,7 +52,7 @@ const SettingsPage: React.FC = () => {
         },
         users: [],
       }
-      await saveConfig(JSON.stringify(cfg))
+      await saveConfig(cfg)
     } catch (e) { console.error('保存配置失败:', e) }
     setSaving(false)
   }
@@ -62,6 +62,7 @@ const SettingsPage: React.FC = () => {
     { id: 'basic', label: '基本设置', icon: Settings },
     { id: 'email', label: '邮件通知', icon: Mail },
     { id: 'api', label: 'API配置', icon: Server },
+    { id: 'about', label: '关于软件', icon: Info },
   ]
 
   return (
@@ -180,6 +181,64 @@ const SettingsPage: React.FC = () => {
                   <label className="text-xs font-medium text-dark-300 mb-1.5 block">外置题库服务URL</label>
                   <input type="text" value={apiQueUrl} onChange={e => setApiQueUrl(e.target.value)} placeholder="http://localhost:8083" className="input-field" />
                   <p className="text-xs text-dark-500 mt-1">外置题库服务的访问地址，用于自动考试功能</p>
+                </div>
+              </div>
+            )}
+
+            {activeTab === 'about' && (
+              <div className="space-y-6">
+                <div className="flex items-center gap-4">
+                  <div className="w-16 h-16 rounded-2xl bg-gradient-to-br from-accent-500 to-neon-purple flex items-center justify-center shadow-lg shadow-accent-600/20">
+                    <span className="text-3xl">⚡</span>
+                  </div>
+                  <div>
+                    <h3 className="text-xl font-bold text-dark-50">Yatori-UI</h3>
+                    <p className="text-sm text-dark-400">智能网课助手 · 桌面端</p>
+                    <p className="text-xs text-accent-400 mt-1">版本号：{APP_VERSION}</p>
+                  </div>
+                </div>
+
+                <div className="border-t border-dark-700 pt-4 space-y-4">
+                  <div className="p-4 rounded-lg bg-dark-800/30 space-y-3">
+                    <h4 className="text-sm font-semibold text-dark-200">核心代码来源</h4>
+                    <p className="text-xs text-dark-400">
+                      本软件核心代码由 <span className="text-accent-400 font-medium">Yatori-Dev</span> 提供
+                    </p>
+                    <a
+                      href="https://github.com/yatori-dev/yatori-go-console"
+                      target="_blank"
+                      rel="noopener noreferrer"
+                      className="inline-flex items-center gap-1.5 text-xs text-blue-400 hover:text-blue-300 transition-colors"
+                    >
+                      <ExternalLink size={12} />
+                      github.com/yatori-dev/yatori-go-console
+                    </a>
+                  </div>
+
+                  <div className="p-4 rounded-lg bg-dark-800/30 space-y-3">
+                    <h4 className="text-sm font-semibold text-dark-200">作者</h4>
+                    <p className="text-sm text-neon-purple font-medium">❦Angelic 音乐</p>
+                    <p className="text-xs text-dark-400">联系方式：QQ 2844189228</p>
+                  </div>
+
+                  <div className="p-4 rounded-lg bg-dark-800/30 space-y-3">
+                    <h4 className="text-sm font-semibold text-dark-200">项目地址</h4>
+                    <a
+                      href="https://github.com/MHL-25/yatori-UI"
+                      target="_blank"
+                      rel="noopener noreferrer"
+                      className="inline-flex items-center gap-1.5 text-xs text-blue-400 hover:text-blue-300 transition-colors"
+                    >
+                      <ExternalLink size={12} />
+                      github.com/MHL-25/yatori-UI
+                    </a>
+                  </div>
+                </div>
+
+                <div className="border-t border-dark-700 pt-4">
+                  <p className="text-xs text-dark-500 text-center">
+                    本程序仅供学习、研究与技术交流使用，严禁用于任何商业用途或违法活动。
+                  </p>
                 </div>
               </div>
             )}

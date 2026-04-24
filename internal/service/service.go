@@ -324,3 +324,56 @@ func GetAiTypes() []map[string]string {
 	}
 	return types
 }
+
+func StartAllBrush() (int, int) {
+	users, err := dao.QueryAllUsers()
+	if err != nil {
+		return 0, 0
+	}
+	success := 0
+	total := 0
+	for _, user := range users {
+		act := activity.GetActivity(user.Uid)
+		if act != nil && act.IsRunning() {
+			continue
+		}
+		total++
+		if act == nil {
+			act = activity.BuildActivity(user, getSetting())
+			if act == nil {
+				continue
+			}
+			activity.PutActivity(user.Uid, act)
+		}
+		if err := act.Start(); err == nil {
+			success++
+		}
+	}
+	return success, total
+}
+
+func StartBatchBrush(uids []string) (int, int) {
+	success := 0
+	total := len(uids)
+	for _, uid := range uids {
+		user, err := dao.QueryUserByUid(uid)
+		if err != nil || user == nil {
+			continue
+		}
+		act := activity.GetActivity(uid)
+		if act != nil && act.IsRunning() {
+			continue
+		}
+		if act == nil {
+			act = activity.BuildActivity(*user, getSetting())
+			if act == nil {
+				continue
+			}
+			activity.PutActivity(uid, act)
+		}
+		if err := act.Start(); err == nil {
+			success++
+		}
+	}
+	return success, total
+}

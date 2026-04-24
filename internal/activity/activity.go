@@ -1,4 +1,4 @@
-package activity
+﻿package activity
 
 import (
 	"encoding/json"
@@ -11,6 +11,7 @@ import (
 
 	"yatori-UI/internal/config"
 	"yatori-UI/internal/entity"
+	"yatori-UI/internal/email"
 	"yatori-UI/internal/monitor"
 
 	"github.com/thedevsaddam/gojsonq"
@@ -92,6 +93,16 @@ func (u *UserActivityBase) setStopped(stopped bool) {
 	u.mu.Lock()
 	defer u.mu.Unlock()
 	u.Stopped = stopped
+}
+
+func (u *UserActivityBase) sendCompletionEmail() {
+	setting := u.Setting
+	user := u.User
+	if setting.EmailInform.Sw == 1 && len(user.InformEmails) > 0 {
+		platformName := config.PlatformNames[user.AccountType]
+		content := fmt.Sprintf("账号：[%s]</br>平台：[%s]</br>通知：所有课程已执行完毕", user.Account, platformName)
+		go email.SendMail(setting.EmailInform.SMTPHost, setting.EmailInform.SMTPPort, setting.EmailInform.UserName, setting.EmailInform.Password, user.InformEmails, content)
+	}
 }
 
 var activityMap = struct {
@@ -210,6 +221,7 @@ func (a *XXTActivity) run() {
 		}
 		if !a.isStopped() {
 			monitor.GlobalEventBus.UpdateStatus(a.Uid, monitor.StatusCompleted)
+			a.sendCompletionEmail()
 			monitor.GlobalEventBus.UpdateProgress(a.Uid, 100, "���пγ�ѧϰ���")
 		}
 	}()
@@ -949,6 +961,7 @@ func (a *YingHuaActivity) run() {
 		}
 		if !a.isStopped() {
 			monitor.GlobalEventBus.UpdateStatus(a.Uid, monitor.StatusCompleted)
+			a.sendCompletionEmail()
 			monitor.GlobalEventBus.UpdateProgress(a.Uid, 100, "���пγ�ѧϰ���")
 		}
 	}()
@@ -1257,6 +1270,7 @@ func (a *EnaeaActivity) run() {
 		}
 		if !a.isStopped() {
 			monitor.GlobalEventBus.UpdateStatus(a.Uid, monitor.StatusCompleted)
+			a.sendCompletionEmail()
 			monitor.GlobalEventBus.UpdateProgress(a.Uid, 100, "所有课程学习完毕")
 		}
 	}()
@@ -1437,6 +1451,7 @@ func (a *CqieActivity) run() {
 		}
 		if !a.isStopped() {
 			monitor.GlobalEventBus.UpdateStatus(a.Uid, monitor.StatusCompleted)
+			a.sendCompletionEmail()
 			monitor.GlobalEventBus.UpdateProgress(a.Uid, 100, "所有课程学习完毕")
 		}
 	}()
@@ -1598,6 +1613,7 @@ func (a *IcveActivity) run() {
 		}
 		if !a.isStopped() {
 			monitor.GlobalEventBus.UpdateStatus(a.Uid, monitor.StatusCompleted)
+			a.sendCompletionEmail()
 			monitor.GlobalEventBus.UpdateProgress(a.Uid, 100, "所有课程学习完毕")
 		}
 	}()
@@ -1705,6 +1721,7 @@ func (a *QsxtActivity) run() {
 		}
 		if !a.isStopped() {
 			monitor.GlobalEventBus.UpdateStatus(a.Uid, monitor.StatusCompleted)
+			a.sendCompletionEmail()
 			monitor.GlobalEventBus.UpdateProgress(a.Uid, 100, "所有课程学习完毕")
 		}
 	}()
@@ -1895,6 +1912,7 @@ func (a *WeLearnActivity) run() {
 		}
 		if !a.isStopped() {
 			monitor.GlobalEventBus.UpdateStatus(a.Uid, monitor.StatusCompleted)
+			a.sendCompletionEmail()
 			monitor.GlobalEventBus.UpdateProgress(a.Uid, 100, "所有课程学习完毕")
 		}
 	}()
@@ -2075,6 +2093,7 @@ func (a *KetangxActivity) run() {
 		}
 		if !a.isStopped() {
 			monitor.GlobalEventBus.UpdateStatus(a.Uid, monitor.StatusCompleted)
+			a.sendCompletionEmail()
 			monitor.GlobalEventBus.UpdateProgress(a.Uid, 100, "所有课程学习完毕")
 		}
 	}()
@@ -2176,6 +2195,7 @@ func (a *HqkjActivity) run() {
 		}
 		if !a.isStopped() {
 			monitor.GlobalEventBus.UpdateStatus(a.Uid, monitor.StatusCompleted)
+			a.sendCompletionEmail()
 			monitor.GlobalEventBus.UpdateProgress(a.Uid, 100, "所有课程学习完毕")
 		}
 	}()

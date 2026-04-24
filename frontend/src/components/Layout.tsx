@@ -112,12 +112,13 @@ const Sidebar: React.FC = () => {
       <div className="p-2 border-t border-dark-800/50">
         <button
           onClick={toggleSidebar}
-          className="sidebar-item w-full"
+          className="sidebar-item w-full justify-center"
+          title={sidebarCollapsed ? "展开侧栏" : "收起侧栏"}
         >
           {sidebarCollapsed ? <ChevronRight size={18} /> : <ChevronLeft size={18} />}
           <span className={cn(
-            "whitespace-nowrap overflow-hidden transition-opacity duration-200",
-            sidebarCollapsed ? "opacity-0 w-0" : "opacity-100"
+            "whitespace-nowrap overflow-hidden transition-all duration-200",
+            sidebarCollapsed ? "opacity-0 w-0 ml-0" : "opacity-100 ml-2"
           )}>收起侧栏</span>
         </button>
       </div>

@@ -1,7 +1,7 @@
 import React, { useState, useEffect } from 'react'
 import { useAppStore } from '../stores/useAppStore'
 import { cn, getPlatformName, getPlatformIcon, PLATFORM_LIST } from '../utils/helpers'
-import { Plus, Trash2, Edit3, CheckCircle, XCircle, Play, Square, Pause, Search, RefreshCw, Users, Settings, ChevronDown, ChevronUp, Mail, Upload } from 'lucide-react'
+import { Plus, Trash2, Edit3, CheckCircle, XCircle, Play, Square, Pause, Search, RefreshCw, Users, Settings, ChevronDown, ChevronUp, Mail, Upload, PlayCircle, CheckSquare, Square as EmptySquare } from 'lucide-react'
 import { motion, AnimatePresence } from 'framer-motion'
 
 const PLATFORM_VIDEO_MODES: Record<string, { value: number; label: string; desc: string }[]> = {
@@ -439,13 +439,16 @@ const EditAccountModal: React.FC<{ open: boolean; onClose: () => void; account: 
 }
 
 const AccountsPage: React.FC = () => {
-  const { accounts, fetchAccounts, deleteAccount, loginCheck, startBrush, stopBrush, pauseBrush, progressMap, importConfig } = useAppStore()
+  const { accounts, fetchAccounts, deleteAccount, loginCheck, startBrush, stopBrush, pauseBrush, startAllBrush, startBatchBrush, progressMap, importConfig } = useAppStore()
   const [showAdd, setShowAdd] = useState(false)
   const [editAccount, setEditAccount] = useState<EditAccount | null>(null)
   const [search, setSearch] = useState('')
   const [checking, setChecking] = useState<string | null>(null)
   const [actionMsg, setActionMsg] = useState<{ uid: string; msg: string; type: 'ok' | 'err' } | null>(null)
   const [importing, setImporting] = useState(false)
+  const [batchMode, setBatchMode] = useState(false)
+  const [selectedUids, setSelectedUids] = useState<Set<string>>(new Set())
+  const [batchStarting, setBatchStarting] = useState(false)
 
   useEffect(() => {
     fetchAccounts()
@@ -495,6 +498,47 @@ const AccountsPage: React.FC = () => {
     if (result.ok) { alert(result.msg) } else { alert('导入失败: ' + result.msg) }
   }
 
+  const handleStartAll = async () => {
+    setBatchStarting(true)
+    const result = await startAllBrush()
+    setBatchStarting(false)
+    if (result.ok) {
+      alert(`已启动 ${result.success}/${result.total} 个账号`)
+    } else {
+      alert('启动失败: ' + result.msg)
+    }
+  }
+
+  const handleBatchStart = async () => {
+    if (selectedUids.size === 0) return
+    setBatchStarting(true)
+    const result = await startBatchBrush(Array.from(selectedUids))
+    setBatchStarting(false)
+    if (result.ok) {
+      alert(`已启动 ${result.success}/${result.total} 个账号`)
+      setSelectedUids(new Set())
+      setBatchMode(false)
+    } else {
+      alert('启动失败: ' + result.msg)
+    }
+  }
+
+  const toggleSelect = (uid: string) => {
+    setSelectedUids(prev => {
+      const next = new Set(prev)
+      if (next.has(uid)) next.delete(uid)
+      else next.add(uid)
+      return next
+    })
+  }
+
+  const selectAll = () => {
+    const allUids = filtered.filter(a => !a.isRunning).map(a => a.uid)
+    setSelectedUids(new Set(allUids))
+  }
+
+  const deselectAll = () => setSelectedUids(new Set())
+
   return (
     <div className="p-6 space-y-6">
       <div className="flex items-center justify-between">
@@ -509,6 +553,13 @@ const AccountsPage: React.FC = () => {
           <button onClick={handleImport} disabled={importing} className={cn("btn-secondary flex items-center gap-2", importing && "opacity-50")}>
             <Upload size={16} />{importing ? '导入中...' : '导入配置'}
           </button>
+          <button onClick={handleStartAll} disabled={batchStarting} className={cn("btn-success flex items-center gap-2", batchStarting && "opacity-50")}>
+            <PlayCircle size={16} />{batchStarting ? '启动中...' : '一键启动全部'}
+          </button>
+          <button onClick={() => { setBatchMode(!batchMode); setSelectedUids(new Set()) }}
+            className={cn("btn-secondary flex items-center gap-2", batchMode && "bg-accent-600/20 text-accent-400 border-accent-600/30")}>
+            <CheckSquare size={16} />{batchMode ? '取消批量' : '批量启动'}
+          </button>
         </div>
       </div>
 
@@ -520,6 +571,20 @@ const AccountsPage: React.FC = () => {
         <button onClick={() => fetchAccounts()} className="btn-secondary flex items-center gap-2">
           <RefreshCw size={14} />刷新
         </button>
+        {batchMode && (
+          <>
+            <button onClick={selectAll} className="btn-secondary text-xs flex items-center gap-1">
+              <CheckSquare size={14} />全选
+            </button>
+            <button onClick={deselectAll} className="btn-secondary text-xs flex items-center gap-1">
+              <EmptySquare size={14} />全不选
+            </button>
+            <button onClick={handleBatchStart} disabled={batchStarting || selectedUids.size === 0}
+              className={cn("btn-success text-xs flex items-center gap-1", (batchStarting || selectedUids.size === 0) && "opacity-50")}>
+              <Play size={14} />{batchStarting ? '启动中...' : `启动选中 (${selectedUids.size})`}
+            </button>
+          </>
+        )}
       </div>
 
       {filtered.length === 0 ? (
@@ -546,6 +611,17 @@ const AccountsPage: React.FC = () => {
                       )}>
                       {actionInfo.msg}
                     </motion.div>
+                  )}
+
+                  {batchMode && (
+                    <button onClick={() => toggleSelect(account.uid)}
+                      className={cn("w-5 h-5 rounded border-2 flex items-center justify-center flex-shrink-0 transition-colors",
+                        selectedUids.has(account.uid)
+                          ? "bg-accent-600 border-accent-600"
+                          : "border-dark-600 hover:border-dark-400"
+                      )}>
+                      {selectedUids.has(account.uid) && <CheckCircle size={14} className="text-white" />}
+                    </button>
                   )}
 
                   <div className="w-10 h-10 rounded-lg bg-dark-700 flex items-center justify-center text-lg flex-shrink-0">

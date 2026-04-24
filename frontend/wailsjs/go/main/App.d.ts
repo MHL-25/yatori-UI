@@ -15,6 +15,8 @@ export function GetAiTypes():Promise<string>;
 
 export function GetAllProgress():Promise<string>;
 
+export function GetAppVersion():Promise<string>;
+
 export function GetConfig():Promise<string>;
 
 export function GetPlatforms():Promise<string>;
@@ -38,6 +40,10 @@ export function QuitApp():Promise<void>;
 export function SaveConfig(arg1:string):Promise<string>;
 
 export function ShowWindow():Promise<void>;
+
+export function StartAllBrush():Promise<string>;
+
+export function StartBatchBrush(arg1:string):Promise<string>;
 
 export function StartBrush(arg1:string):Promise<string>;
 

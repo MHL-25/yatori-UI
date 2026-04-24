@@ -1,6 +1,6 @@
 import { create } from 'zustand'
 import { parseResponse } from '../utils/helpers'
-import { GetAccountList, AddAccount, DeleteAccount, UpdateAccount, LoginCheck, StartBrush, StopBrush, PauseBrush, GetAllProgress, GetConfig, SaveConfig, ImportConfigFile } from '../../wailsjs/go/main/App'
+import { GetAccountList, AddAccount, DeleteAccount, UpdateAccount, LoginCheck, StartBrush, StopBrush, PauseBrush, GetAllProgress, GetConfig, SaveConfig, ImportConfigFile, StartAllBrush, StartBatchBrush } from '../../wailsjs/go/main/App'
 
 interface Account {
   uid: string
@@ -55,6 +55,8 @@ interface AppStore {
   startBrush: (uid: string) => Promise<{ ok: boolean; msg: string }>
   stopBrush: (uid: string) => Promise<{ ok: boolean; msg: string }>
   pauseBrush: (uid: string) => Promise<{ ok: boolean; msg: string }>
+  startAllBrush: () => Promise<{ ok: boolean; msg: string; success: number; total: number }>
+  startBatchBrush: (uids: string[]) => Promise<{ ok: boolean; msg: string; success: number; total: number }>
   fetchProgress: () => Promise<void>
   fetchConfig: () => Promise<void>
   saveConfig: (cfg: any) => Promise<{ ok: boolean; msg: string }>
@@ -181,6 +183,34 @@ export const useAppStore = create<AppStore>((set, get) => ({
       return { ok: false, msg: resp.message || 'Failed' }
     } catch (e: any) {
       return { ok: false, msg: e?.message || 'Network error' }
+    }
+  },
+
+  startAllBrush: async () => {
+    try {
+      const result = await StartAllBrush()
+      const resp = parseResponse<any>(result)
+      if (resp.code === 200) {
+        await get().fetchAccounts()
+        return { ok: true, msg: 'OK', success: resp.data?.success || 0, total: resp.data?.total || 0 }
+      }
+      return { ok: false, msg: resp.message || 'Failed', success: 0, total: 0 }
+    } catch (e: any) {
+      return { ok: false, msg: e?.message || 'Network error', success: 0, total: 0 }
+    }
+  },
+
+  startBatchBrush: async (uids) => {
+    try {
+      const result = await StartBatchBrush(JSON.stringify(uids))
+      const resp = parseResponse<any>(result)
+      if (resp.code === 200) {
+        await get().fetchAccounts()
+        return { ok: true, msg: 'OK', success: resp.data?.success || 0, total: resp.data?.total || 0 }
+      }
+      return { ok: false, msg: resp.message || 'Failed', success: 0, total: 0 }
+    } catch (e: any) {
+      return { ok: false, msg: e?.message || 'Network error', success: 0, total: 0 }
     }
   },
 

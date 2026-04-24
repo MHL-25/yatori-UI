@@ -11,6 +11,7 @@ require (
 	github.com/wailsapp/wails/v2 v2.11.0
 	github.com/yatori-dev/yatori-go-core v1.9.1-0.20260404160744-40adaa013d68
 	go.yaml.in/yaml/v3 v3.0.4
+	gopkg.in/gomail.v2 v2.0.0-20160411212932-81ebce5c23df
 	gorm.io/driver/sqlite v1.6.0
 	gorm.io/gorm v1.31.1
 )
@@ -71,6 +72,7 @@ require (
 	golang.org/x/net v0.47.0 // indirect
 	golang.org/x/sys v0.39.0 // indirect
 	golang.org/x/text v0.32.0 // indirect
+	gopkg.in/alexcesaro/quotedprintable.v3 v3.0.0-20150716171945-2caba252f4dc // indirect
 )
 
 replace github.com/yatori-dev/yatori-go-core => E:/xm/yaunxaingm/yatori-go-core-main2k/yatori-go-core-main

@@ -2,13 +2,16 @@ import React, { useState, useEffect } from 'react'
 
 interface DisclaimerModalProps {
   onAccept: () => void
+  readOnly?: boolean
+  onClose?: () => void
 }
 
-const DisclaimerModal: React.FC<DisclaimerModalProps> = ({ onAccept }) => {
-  const [countdown, setCountdown] = useState(10)
-  const [canAccept, setCanAccept] = useState(false)
+const DisclaimerModal: React.FC<DisclaimerModalProps> = ({ onAccept, readOnly, onClose }) => {
+  const [countdown, setCountdown] = useState(readOnly ? 0 : 10)
+  const [canAccept, setCanAccept] = useState(readOnly)
 
   useEffect(() => {
+    if (readOnly) return
     if (countdown <= 0) {
       setCanAccept(true)
       return
@@ -17,7 +20,16 @@ const DisclaimerModal: React.FC<DisclaimerModalProps> = ({ onAccept }) => {
       setCountdown(prev => prev - 1)
     }, 1000)
     return () => clearInterval(timer)
-  }, [countdown])
+  }, [countdown, readOnly])
+
+  const handleDecline = async () => {
+    try {
+      const { QuitApp } = await import('../../wailsjs/go/main/App')
+      await QuitApp()
+    } catch {
+      window.close()
+    }
+  }
 
   return (
     <div className="fixed inset-0 z-[9999] flex items-center justify-center bg-black/80 backdrop-blur-sm">
@@ -56,29 +68,40 @@ const DisclaimerModal: React.FC<DisclaimerModalProps> = ({ onAccept }) => {
         </div>
 
         <div className="border-t border-dark-700 p-4 flex flex-col items-center gap-3">
-          {!canAccept && (
+          {!readOnly && !canAccept && (
             <p className="text-dark-400 text-sm">
               请仔细阅读声明，<span className="text-accent-400 font-bold">{countdown}</span> 秒后可点击接受
             </p>
           )}
           <div className="flex gap-3">
-            <button
-              onClick={() => window.close()}
-              className="px-6 py-2 rounded-lg bg-dark-700 text-dark-300 hover:bg-dark-600 transition-colors text-sm"
-            >
-              拒绝并退出
-            </button>
-            <button
-              onClick={onAccept}
-              disabled={!canAccept}
-              className={`px-6 py-2 rounded-lg text-sm font-medium transition-all ${
-                canAccept
-                  ? 'bg-gradient-to-r from-accent-500 to-neon-purple text-white hover:opacity-90 cursor-pointer'
-                  : 'bg-dark-700 text-dark-500 cursor-not-allowed'
-              }`}
-            >
-              {canAccept ? '我已阅读并接受' : `请等待 ${countdown} 秒`}
-            </button>
+            {!readOnly && (
+              <button
+                onClick={handleDecline}
+                className="px-6 py-2 rounded-lg bg-dark-700 text-dark-300 hover:bg-dark-600 transition-colors text-sm"
+              >
+                拒绝并退出
+              </button>
+            )}
+            {readOnly ? (
+              <button
+                onClick={onClose}
+                className="px-6 py-2 rounded-lg bg-gradient-to-r from-accent-500 to-neon-purple text-white hover:opacity-90 transition-opacity text-sm font-medium"
+              >
+                我已知晓
+              </button>
+            ) : (
+              <button
+                onClick={onAccept}
+                disabled={!canAccept}
+                className={`px-6 py-2 rounded-lg text-sm font-medium transition-all ${
+                  canAccept
+                    ? 'bg-gradient-to-r from-accent-500 to-neon-purple text-white hover:opacity-90 cursor-pointer'
+                    : 'bg-dark-700 text-dark-500 cursor-not-allowed'
+                }`}
+              >
+                {canAccept ? '我已阅读并接受' : `请等待 ${countdown} 秒`}
+              </button>
+            )}
           </div>
         </div>
       </div>

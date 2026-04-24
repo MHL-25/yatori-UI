@@ -1,0 +1,22 @@
+{
+  "permissions": {
+    "allow": [
+      "Bash(git config *)",
+      "Bash(git fetch *)",
+      "Bash(git merge *)",
+      "Bash(git rm *)",
+      "Bash(git commit *)",
+      "Read(//d/新建文件夹/**)",
+      "Bash(grep \"^\\\\\\\\.\")",
+      "Bash(python3 -c \"import zipfile; z=zipfile.ZipFile\\('skills-main.zip'\\); print\\([f for f in z.namelist\\(\\)[:20]]\\)\")",
+      "Bash(powershell -Command \"Expand-Archive -Path 'D:\\\\新建文件夹\\\\skills-main.zip' -DestinationPath 'D:\\\\新建文件夹\\\\skills-main' -Force\")",
+      "Bash(python3 -c ' *)",
+      "Read(//d/Desktop/网课介绍（素材）/**)"
+    ],
+    "additionalDirectories": [
+      "e:\\xm\\yatori-UI",
+      "D:\\新建文件夹\\github-upload-skill",
+      "d:\\Desktop\\网课介绍（素材）"
+    ]
+  }
+}

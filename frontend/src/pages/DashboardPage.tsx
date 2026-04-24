@@ -1,8 +1,8 @@
-import React, { useEffect } from 'react'
+import React, { useEffect, useState } from 'react'
 import { useAppStore } from '../stores/useAppStore'
-import { cn, getPlatformName, getPlatformIcon, getStatusColor, getStatusLabel, getProgressColor } from '../utils/helpers'
-import { Users, Activity, Play, Square, CheckCircle, AlertCircle, Clock, Zap, Pause } from 'lucide-react'
-import { motion } from 'framer-motion'
+import { cn, getPlatformName, getPlatformIcon, getStatusColor, getStatusLabel, getProgressColor, APP_VERSION } from '../utils/helpers'
+import { Users, Activity, Play, CheckCircle, AlertCircle, Clock, Zap, Megaphone } from 'lucide-react'
+import DisclaimerModal from '../components/DisclaimerModal'
 
 const StatCard: React.FC<{ icon: React.ReactNode; label: string; value: string | number; color: string; sub?: string }> = ({ icon, label, value, color, sub }) => (
   <div className="glass-card p-4 flex items-center gap-4">
@@ -18,7 +18,8 @@ const StatCard: React.FC<{ icon: React.ReactNode; label: string; value: string |
 )
 
 const DashboardPage: React.FC = () => {
-  const { accounts, progressMap, setCurrentPage, startBrush, stopBrush, pauseBrush, fetchAccounts, fetchProgress } = useAppStore()
+  const { accounts, progressMap, setCurrentPage, fetchAccounts, fetchProgress } = useAppStore()
+  const [showDisclaimer, setShowDisclaimer] = useState(false)
 
   useEffect(() => {
     fetchAccounts()
@@ -44,9 +45,18 @@ const DashboardPage: React.FC = () => {
           <h1 className="text-2xl font-bold text-dark-50">仪表盘</h1>
           <p className="text-sm text-dark-400 mt-1">实时概览所有网课任务状态</p>
         </div>
-        <div className="flex items-center gap-2">
-          <div className="w-2 h-2 rounded-full bg-emerald-400 animate-pulse" />
-          <span className="text-xs text-dark-400">系统运行中</span>
+        <div className="flex items-center gap-3">
+          <button
+            onClick={() => setShowDisclaimer(true)}
+            className="btn-secondary flex items-center gap-2"
+            title="查看免责声明与使用须知"
+          >
+            <Megaphone size={14} />公告
+          </button>
+          <div className="flex items-center gap-2">
+            <div className="w-2 h-2 rounded-full bg-emerald-400 animate-pulse" />
+            <span className="text-xs text-dark-400">系统运行中</span>
+          </div>
         </div>
       </div>
 
@@ -105,17 +115,14 @@ const DashboardPage: React.FC = () => {
           </div>
         ) : (
           <div className="space-y-3">
-            {accounts.map((account, index) => {
+            {accounts.map((account) => {
               const progress = progressMap[account.uid]
               const status = progress?.status || (account.isRunning ? 'running' : 'idle')
               const progressValue = progress?.progress || 0
 
               return (
-                <motion.div
+                <div
                   key={account.uid}
-                  initial={{ opacity: 0, y: 10 }}
-                  animate={{ opacity: 1, y: 0 }}
-                  transition={{ delay: index * 0.05 }}
                   className="flex items-center gap-4 p-3 rounded-lg bg-dark-800/30 hover:bg-dark-800/50 transition-colors"
                 >
                   <div className="w-8 h-8 rounded-lg bg-dark-700 flex items-center justify-center text-sm">
@@ -149,28 +156,29 @@ const DashboardPage: React.FC = () => {
                       </div>
                     )}
                   </div>
-                  <div className="flex items-center gap-2">
-                    {status === 'running' ? (
-                      <>
-                        <button onClick={() => pauseBrush(account.uid)} className="btn-secondary text-xs px-3 py-1.5">
-                          <Pause size={12} className="mr-1 inline" />暂停
-                        </button>
-                        <button onClick={() => stopBrush(account.uid)} className="btn-danger text-xs px-3 py-1.5">
-                          <Square size={12} className="mr-1 inline" />停止
-                        </button>
-                      </>
-                    ) : (
-                      <button onClick={() => startBrush(account.uid)} className="btn-success text-xs px-3 py-1.5">
-                        <Play size={12} className="mr-1 inline" />启动
-                      </button>
-                    )}
-                  </div>
-                </motion.div>
+                  <span className={cn(
+                    "text-xs px-2 py-0.5 rounded-full shrink-0",
+                    status === 'running' ? 'bg-accent-600/20 text-accent-400' :
+                    status === 'completed' ? 'bg-emerald-600/20 text-emerald-400' :
+                    status === 'error' ? 'bg-red-600/20 text-red-400' :
+                    'bg-dark-700 text-dark-400'
+                  )}>
+                    {getStatusLabel(status)}
+                  </span>
+                </div>
               )
             })}
           </div>
         )}
       </div>
+
+      {showDisclaimer && (
+        <DisclaimerModal
+          readOnly
+          onAccept={() => {}}
+          onClose={() => setShowDisclaimer(false)}
+        />
+      )}
     </div>
   )
 }

@@ -28,8 +28,14 @@ type App struct {
 	shouldQuit bool
 }
 
+const AppVersion = "1.0.2"
+
 func NewApp() *App {
 	return &App{notified: make(map[string]time.Time)}
+}
+
+func (a *App) GetAppVersion() string {
+	return AppVersion
 }
 
 func (a *App) beforeClose(ctx context.Context) bool {
@@ -315,6 +321,32 @@ func (a *App) PauseBrush(uid string) string {
 		return string(jsonData)
 	}
 	resp := entity.SuccessResponse("OK", nil)
+	jsonData, _ := json.Marshal(resp)
+	return string(jsonData)
+}
+
+func (a *App) StartAllBrush() string {
+	success, total := service.StartAllBrush()
+	resp := entity.SuccessResponse("OK", map[string]interface{}{
+		"success": success,
+		"total":   total,
+	})
+	jsonData, _ := json.Marshal(resp)
+	return string(jsonData)
+}
+
+func (a *App) StartBatchBrush(jsonUids string) string {
+	var uids []string
+	if err := json.Unmarshal([]byte(jsonUids), &uids); err != nil {
+		resp := entity.ErrorResponse("Parse error: " + err.Error())
+		jsonData, _ := json.Marshal(resp)
+		return string(jsonData)
+	}
+	success, total := service.StartBatchBrush(uids)
+	resp := entity.SuccessResponse("OK", map[string]interface{}{
+		"success": success,
+		"total":   total,
+	})
 	jsonData, _ := json.Marshal(resp)
 	return string(jsonData)
 }

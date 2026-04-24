@@ -30,6 +30,10 @@ export function GetAllProgress() {
   return window['go']['main']['App']['GetAllProgress']();
 }
 
+export function GetAppVersion() {
+  return window['go']['main']['App']['GetAppVersion']();
+}
+
 export function GetConfig() {
   return window['go']['main']['App']['GetConfig']();
 }
@@ -76,6 +80,14 @@ export function SaveConfig(arg1) {
 
 export function ShowWindow() {
   return window['go']['main']['App']['ShowWindow']();
+}
+
+export function StartAllBrush() {
+  return window['go']['main']['App']['StartAllBrush']();
+}
+
+export function StartBatchBrush(arg1) {
+  return window['go']['main']['App']['StartBatchBrush'](arg1);
 }
 
 export function StartBrush(arg1) {
