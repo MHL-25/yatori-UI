@@ -457,5 +457,4 @@ setting:
 
 <div align="center">
   <p>如果觉得有用，请给个 ⭐ Star 支持一下！</p>
-  <p>Made with ❤️ by Angelic</p>
 </div>
