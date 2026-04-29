@@ -4,6 +4,7 @@ import (
 	"encoding/json"
 	"fmt"
 	"math/rand"
+	"net/http"
 	"regexp"
 	"strconv"
 	"strings"
@@ -180,7 +181,6 @@ func BuildActivity(userPO entity.UserPO, setting config.Setting) Activity {
 
 type XXTActivity struct {
 	UserActivityBase
-	model3Caches []xuexitongApi.XueXiTUserCache
 }
 
 func (a *XXTActivity) Login() error {
@@ -258,23 +258,10 @@ func (a *XXTActivity) run() {
 
 	user := a.User
 	if user.CoursesCustom.VideoModel == 3 {
-		num := 3
-		if user.CoursesCustom.CxNode != nil && *user.CoursesCustom.CxNode != 0 {
-			num = *user.CoursesCustom.CxNode
-		}
 		if user.CoursesCustom.CxNode != nil && *user.CoursesCustom.CxNode == -1 {
 			monitor.GlobalEventBus.AddLog(a.Uid, "⚠️ 警告: 无限制并发模式，可能触发封号!")
 		} else {
-			monitor.GlobalEventBus.AddLog(a.Uid, fmt.Sprintf("🔄 多任务点模式: 同时 %d 个任务点并发", num))
-		}
-		a.model3Caches = make([]xuexitongApi.XueXiTUserCache, 0, num)
-		for i := 0; i < num; i++ {
-			a.model3Caches = append(a.model3Caches, *cache)
-			if i > 0 {
-				xuexitong.ReLogin(&a.model3Caches[i])
-				monitor.GlobalEventBus.AddLog(a.Uid, fmt.Sprintf("🔑 并发缓存登录 %d/%d", i+1, num))
-				time.Sleep(1 * time.Second)
-			}
+			monitor.GlobalEventBus.AddLog(a.Uid, "🔄 多任务点模式: 课程串行 + 节点并发")
 		}
 	}
 
@@ -391,9 +378,26 @@ func (a *XXTActivity) chapterStudy(setting config.Setting, cache *xuexitongApi.X
 		return i.PointTotal >= 0 && i.PointTotal == i.PointFinished
 	}
 
-	if user.CoursesCustom.VideoModel == 3 && len(a.model3Caches) > 0 {
-		queue := make(chan int, len(a.model3Caches))
-		for i := 0; i < len(a.model3Caches); i++ {
+	if user.CoursesCustom.VideoModel == 3 {
+		nodeNum := len(nodes)
+		if user.CoursesCustom.CxNode != nil && *user.CoursesCustom.CxNode > 0 && *user.CoursesCustom.CxNode < nodeNum {
+			nodeNum = *user.CoursesCustom.CxNode
+		}
+		var model3Caches []*xuexitongApi.XueXiTUserCache
+		for i := 0; i < nodeNum; i++ {
+			cacheCopy := new(xuexitongApi.XueXiTUserCache)
+			*cacheCopy = *cache
+			cookiesDeepCopy := make([]*http.Cookie, len(cache.GetCookies()))
+			copy(cookiesDeepCopy, cache.GetCookies())
+			cacheCopy.SetCookies(cookiesDeepCopy)
+			xuexitong.ReLogin(cacheCopy)
+			model3Caches = append(model3Caches, cacheCopy)
+			time.Sleep(500 * time.Millisecond)
+		}
+		monitor.GlobalEventBus.AddLog(a.Uid, fmt.Sprintf("🔄 多任务点模式: %d 个并发缓存, %d 个节点", len(model3Caches), len(nodes)))
+
+		queue := make(chan int, len(model3Caches))
+		for i := 0; i < len(model3Caches); i++ {
 			queue <- i
 		}
 		var nodeLock sync.WaitGroup
@@ -404,24 +408,18 @@ func (a *XXTActivity) chapterStudy(setting config.Setting, cache *xuexitongApi.X
 			if isFinished(index) {
 				continue
 			}
-			if user.CoursesCustom.CxNode != nil && *user.CoursesCustom.CxNode == -1 {
-				nodeLock.Add(1)
-				go func(index int) {
-					defer nodeLock.Done()
-					resCache := *cache
-					xuexitong.ReLogin(&resCache)
-					a.nodeRun(setting, &resCache, courseItem, pointAction, action, nodes, index, key, courseId)
-				}(index)
-				time.Sleep(1 * time.Second)
-			} else {
-				idx := <-queue
-				nodeLock.Add(1)
-				go func(idx int, index int) {
-					defer nodeLock.Done()
-					defer func() { queue <- idx }()
-					a.nodeRun(setting, &a.model3Caches[idx], courseItem, pointAction, action, nodes, index, key, courseId)
-				}(idx, index)
-			}
+			idx := <-queue
+			nodeLock.Add(1)
+			go func(idx int, index int) {
+				defer nodeLock.Done()
+				defer func() {
+					if r := recover(); r != nil {
+						monitor.GlobalEventBus.AddLog(a.Uid, fmt.Sprintf("💥 节点 %d 发生异常: %v", index, r))
+					}
+					queue <- idx
+				}()
+				a.nodeRun(setting, model3Caches[idx], courseItem, pointAction, action, nodes, index, key, courseId)
+			}(idx, index)
 		}
 		nodeLock.Wait()
 	} else {
@@ -701,6 +699,10 @@ func (a *XXTActivity) nodeRun(setting config.Setting, cache *xuexitongApi.XueXiT
 
 func (a *XXTActivity) executeVideo(cache *xuexitongApi.XueXiTUserCache, courseItem *xuexitong.XueXiTCourse, knowledgeItem xuexitong.KnowledgeItem, p *xuexitongApi.PointVideoDto, key, courseCpi int) {
 	if state, _ := xuexitong.VideoDtoFetchAction(cache, p); state {
+		if p.Duration <= 0 {
+			monitor.GlobalEventBus.AddLog(a.Uid, fmt.Sprintf("⚠️ 视频时长为0，跳过: %s", p.Title))
+			return
+		}
 		playingTime := p.PlayTime
 		if !p.IsPassed && p.PlayTime == p.Duration {
 			playingTime = 0

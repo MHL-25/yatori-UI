@@ -4,7 +4,7 @@
   <p>一款基于 Wails v2 框架构建的跨平台桌面端智能网课辅助工具</p>
   
   <div style="margin: 20px 0;">
-    <img src="https://img.shields.io/badge/Version-1.1.3-blue.svg?style=flat-square" alt="Version">
+    <img src="https://img.shields.io/badge/Version-1.1.4-blue.svg?style=flat-square" alt="Version">
     <img src="https://img.shields.io/badge/Go-1.24.0-00ADD8.svg?style=flat-square&logo=go" alt="Go">
     <img src="https://img.shields.io/badge/Wails-v2.11.0-FF6B6B.svg?style=flat-square" alt="Wails">
     <img src="https://img.shields.io/badge/React-18.2-61DAFB.svg?style=flat-square&logo=react" alt="React">
@@ -365,6 +365,25 @@ setting:
 ---
 
 ## 📝 更新日志
+
+### v1.1.4 (2026-04-29)
+
+#### 🐛 Bug 修复
+- **修复多任务点模式严重问题**：
+  - 修复 `model3Caches` 浅拷贝导致 cookie 数据损坏，视频时长获取为 0
+  - 修复课程级并发导致同一 session 请求风暴，触发 403 和人脸识别
+  - 修复 `XueXiTLoginAction` 缺少 k8s cookie 设置，导致 `VideoDtoFetch` 失败
+  - 修复 `Duration` 检查位置错误，导致视频时长永远不会被获取
+- **修复程序闪退问题**：
+  - goroutine 添加 panic recovery 机制，避免单个节点异常导致整个程序崩溃
+  - 添加信号量并发控制，限制同时运行的 goroutine 数量
+  - 添加登录间隔保护（500ms），避免同时发起大量登录请求
+
+#### 🔧 优化
+- **多任务点模式重构**：与原项目行为完全一致
+  - 每个节点创建独立的登录 session（`ReLogin`）
+  - 使用 channel 信号量控制并发数（默认 3，可配置）
+  - Cookie 深拷贝，确保并发安全
 
 ### v1.1.3 (2026-04-29)
 
