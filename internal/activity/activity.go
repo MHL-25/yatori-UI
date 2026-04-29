@@ -4,6 +4,7 @@ import (
 	"encoding/json"
 	"fmt"
 	"math/rand"
+	"regexp"
 	"strconv"
 	"strings"
 	"sync"
@@ -38,6 +39,7 @@ import (
 	"github.com/yatori-dev/yatori-go-core/que-core/aiq"
 	"github.com/yatori-dev/yatori-go-core/que-core/external"
 	"github.com/yatori-dev/yatori-go-core/utils"
+	"github.com/yatori-dev/yatori-go-core/utils/qutils"
 )
 
 type Activity interface {
@@ -60,6 +62,7 @@ type UserActivityBase struct {
 	Setting   config.Setting `json:"setting"`
 	Running   bool           `json:"running"`
 	Stopped   bool           `json:"stopped"`
+	Paused    bool           `json:"paused"`
 	UserCache interface{}    `json:"-"`
 	mu        sync.Mutex
 }
@@ -93,6 +96,18 @@ func (u *UserActivityBase) setStopped(stopped bool) {
 	u.mu.Lock()
 	defer u.mu.Unlock()
 	u.Stopped = stopped
+}
+
+func (u *UserActivityBase) isPaused() bool {
+	u.mu.Lock()
+	defer u.mu.Unlock()
+	return u.Paused
+}
+
+func (u *UserActivityBase) setPaused(paused bool) {
+	u.mu.Lock()
+	defer u.mu.Unlock()
+	u.Paused = paused
 }
 
 func (u *UserActivityBase) sendCompletionEmail() {
@@ -180,19 +195,20 @@ func (a *XXTActivity) Login() error {
 		loginError = xuexitong.XueXiTCookieLoginAction(cache)
 	}
 	if loginError != nil {
-		monitor.GlobalEventBus.SetError(a.Uid, "登录失败: "+loginError.Error())
+		monitor.GlobalEventBus.SetError(a.Uid, "❌ 登录失败: "+loginError.Error())
 		return loginError
 	}
 	a.UserCache = cache
-	monitor.GlobalEventBus.AddLog(a.Uid, "登录成功: "+cache.Name)
+	monitor.GlobalEventBus.AddLog(a.Uid, "🔑 登录成功: "+cache.Name)
 	return nil
 }
 
 func (a *XXTActivity) Start() error {
 	a.setStopped(false)
+	a.setPaused(false)
 	a.setRunning(true)
 	monitor.GlobalEventBus.UpdateStatus(a.Uid, monitor.StatusRunning)
-	monitor.GlobalEventBus.AddLog(a.Uid, "开始刷课任务...")
+	monitor.GlobalEventBus.AddLog(a.Uid, "🚀 开始刷课任务...")
 	go a.run()
 	return nil
 }
@@ -201,14 +217,15 @@ func (a *XXTActivity) Stop() error {
 	a.setStopped(true)
 	a.setRunning(false)
 	monitor.GlobalEventBus.UpdateStatus(a.Uid, monitor.StatusStopped)
-	monitor.GlobalEventBus.AddLog(a.Uid, "任务已停止")
+	monitor.GlobalEventBus.AddLog(a.Uid, "⏹️ 任务已停止")
 	return nil
 }
 
 func (a *XXTActivity) Pause() error {
 	a.setRunning(false)
+	a.setPaused(true)
 	monitor.GlobalEventBus.UpdateStatus(a.Uid, monitor.StatusPaused)
-	monitor.GlobalEventBus.AddLog(a.Uid, "任务已暂停")
+	monitor.GlobalEventBus.AddLog(a.Uid, "⏸️ 任务已暂停")
 	return nil
 }
 
@@ -219,16 +236,19 @@ func (a *XXTActivity) run() {
 			monitor.GlobalEventBus.SetError(a.Uid, fmt.Sprintf("Panic: %v", r))
 			return
 		}
+		if a.isPaused() {
+			return
+		}
 		if !a.isStopped() {
 			monitor.GlobalEventBus.UpdateStatus(a.Uid, monitor.StatusCompleted)
 			a.sendCompletionEmail()
-			monitor.GlobalEventBus.UpdateProgress(a.Uid, 100, "���пγ�ѧϰ���")
+			monitor.GlobalEventBus.UpdateProgress(a.Uid, 100, "\u6240\u6709\u8bfe\u7a0b\u5b66\u4e60\u5b8c\u6bd5")
 		}
 	}()
 
 	if a.UserCache == nil {
 		monitor.GlobalEventBus.UpdateStatus(a.Uid, monitor.StatusLogging)
-		monitor.GlobalEventBus.AddLog(a.Uid, "正在登录...")
+		monitor.GlobalEventBus.AddLog(a.Uid, "🔑 正在登录...")
 		if err := a.Login(); err != nil {
 			return
 		}
@@ -243,47 +263,51 @@ func (a *XXTActivity) run() {
 			num = *user.CoursesCustom.CxNode
 		}
 		if user.CoursesCustom.CxNode != nil && *user.CoursesCustom.CxNode == -1 {
-			monitor.GlobalEventBus.AddLog(a.Uid, "警告: 无限制并发模式，可能触发封号!")
+			monitor.GlobalEventBus.AddLog(a.Uid, "⚠️ 警告: 无限制并发模式，可能触发封号!")
 		} else {
-			monitor.GlobalEventBus.AddLog(a.Uid, fmt.Sprintf("多任务点模式: 同时 %d 个任务点并发", num))
+			monitor.GlobalEventBus.AddLog(a.Uid, fmt.Sprintf("🔄 多任务点模式: 同时 %d 个任务点并发", num))
 		}
 		a.model3Caches = make([]xuexitongApi.XueXiTUserCache, 0, num)
 		for i := 0; i < num; i++ {
-			c := *cache
+			a.model3Caches = append(a.model3Caches, *cache)
 			if i > 0 {
-				xuexitong.ReLogin(&c)
-				monitor.GlobalEventBus.AddLog(a.Uid, fmt.Sprintf("并发缓存登录 %d/%d", i+1, num))
+				xuexitong.ReLogin(&a.model3Caches[i])
+				monitor.GlobalEventBus.AddLog(a.Uid, fmt.Sprintf("🔑 并发缓存登录 %d/%d", i+1, num))
 				time.Sleep(1 * time.Second)
 			}
-			a.model3Caches = append(a.model3Caches, c)
 		}
 	}
 
 	courseList, err := xuexitong.XueXiTPullCourseAction(cache)
 	if err != nil {
-		monitor.GlobalEventBus.SetError(a.Uid, "��ȡ�γ��б�ʧ��: "+err.Error())
+		monitor.GlobalEventBus.SetError(a.Uid, "❌ 拉取课程列表失败: "+err.Error())
 		return
 	}
 
 	totalCourses := len(courseList)
 	monitor.GlobalEventBus.UpdateCourseProgress(a.Uid, 0, totalCourses)
-	monitor.GlobalEventBus.AddLog(a.Uid, fmt.Sprintf("获取到 %d 门课程", totalCourses))
+	monitor.GlobalEventBus.AddLog(a.Uid, fmt.Sprintf("📚 获取到 %d 门课程，开始学习", totalCourses))
 
-	doneCount := 0
-	for i, course := range courseList {
+	completedCourses := 0
+	var nodesLock sync.WaitGroup
+	for _, course := range courseList {
 		if !a.IsRunning() {
-			return
+			break
 		}
-		studied := a.courseStudy(&course)
-		if studied {
-			doneCount++
-		}
-		monitor.GlobalEventBus.UpdateCourseProgress(a.Uid, i+1, totalCourses)
-		if totalCourses > 0 {
-			monitor.GlobalEventBus.UpdateProgress(a.Uid, float64(i+1)/float64(totalCourses)*100, "正在学习")
+		completedCourses++
+		monitor.GlobalEventBus.UpdateCourseProgress(a.Uid, completedCourses, totalCourses)
+		if user.CoursesCustom.VideoModel == 1 {
+			a.courseStudy(&course)
+		} else {
+			nodesLock.Add(1)
+			go func(course xuexitong.XueXiTCourse) {
+				defer nodesLock.Done()
+				a.courseStudy(&course)
+			}(course)
 		}
 	}
-	monitor.GlobalEventBus.AddLog(a.Uid, "所有待学习课程学习完毕")
+	nodesLock.Wait()
+	monitor.GlobalEventBus.AddLog(a.Uid, "✅ 所有待学习课程学习完毕")
 }
 
 func (a *XXTActivity) courseStudy(courseItem *xuexitong.XueXiTCourse) bool {
@@ -295,36 +319,37 @@ func (a *XXTActivity) courseStudy(courseItem *xuexitong.XueXiTCourse) bool {
 	setting := a.Setting
 
 	if len(user.CoursesCustom.ExcludeCourses) != 0 && config.CmpCourse(courseItem.CourseName, user.CoursesCustom.ExcludeCourses) {
-		monitor.GlobalEventBus.AddLog(a.Uid, "跳过(已排�?: "+courseItem.CourseName)
+		monitor.GlobalEventBus.AddLog(a.Uid, "⏭️ 跳过课程(已排除): "+courseItem.CourseName)
 		return false
 	}
 	if len(user.CoursesCustom.IncludeCourses) != 0 && !config.CmpCourse(courseItem.CourseName, user.CoursesCustom.IncludeCourses) {
-		monitor.GlobalEventBus.AddLog(a.Uid, "跳过(不在包含列表): "+courseItem.CourseName)
+		monitor.GlobalEventBus.AddLog(a.Uid, "⏭️ 跳过课程(不在包含列表): "+courseItem.CourseName)
 		return false
 	}
 	if !courseItem.IsStart {
-		monitor.GlobalEventBus.AddLog(a.Uid, "跳过(未开�?: "+courseItem.CourseName)
+		monitor.GlobalEventBus.AddLog(a.Uid, "⏭️ 跳过课程(未开始): "+courseItem.CourseName)
 		return false
 	}
 
-	monitor.GlobalEventBus.AddLog(a.Uid, "开始学�? "+courseItem.CourseName)
+	monitor.GlobalEventBus.AddLog(a.Uid, "📖 开始学习课程: "+courseItem.CourseName)
 	monitor.GlobalEventBus.UpdateProgress(a.Uid, 0, "学习: "+courseItem.CourseName)
 
 	a.chapterStudy(setting, cache, courseItem)
 	a.writeCourseWorkAndExam(setting, cache, courseItem)
-	monitor.GlobalEventBus.AddLog(a.Uid, "课程学习完毕: "+courseItem.CourseName)
+	monitor.GlobalEventBus.AddLog(a.Uid, "✅ 课程学习完毕: "+courseItem.CourseName)
 	return true
 }
 
 func (a *XXTActivity) chapterStudy(setting config.Setting, cache *xuexitongApi.XueXiTUserCache, courseItem *xuexitong.XueXiTCourse) {
 	if courseItem.JobRate >= 100 || courseItem.State == 1 {
+		monitor.GlobalEventBus.AddLog(a.Uid, "⏭️ 课程已完成，跳过: "+courseItem.CourseName)
 		return
 	}
 	user := a.User
 	key, _ := strconv.Atoi(courseItem.Key)
 	action, _, err := xuexitong.PullCourseChapterAction(cache, courseItem.Cpi, key)
 	if err != nil {
-		monitor.GlobalEventBus.AddLog(a.Uid, "拉取章节失败: "+err.Error())
+		monitor.GlobalEventBus.AddLog(a.Uid, "⚠️ 拉取章节失败: "+err.Error())
 		return
 	}
 
@@ -336,11 +361,11 @@ func (a *XXTActivity) chapterStudy(setting config.Setting, cache *xuexitongApi.X
 	}
 
 	if len(action.Knowledge) == 0 {
-		monitor.GlobalEventBus.AddLog(a.Uid, "该课程章节为空，已自动跳过")
+		monitor.GlobalEventBus.AddLog(a.Uid, "⏭️ 该课程章节为空，已自动跳过")
 		return
 	}
 
-	monitor.GlobalEventBus.AddLog(a.Uid, fmt.Sprintf("获取到 %d 个章节", len(action.Knowledge)))
+	monitor.GlobalEventBus.AddLog(a.Uid, fmt.Sprintf("📑 获取到 %d 个章节", len(action.Knowledge)))
 
 	var nodes []int
 	for _, item := range action.Knowledge {
@@ -351,7 +376,7 @@ func (a *XXTActivity) chapterStudy(setting config.Setting, cache *xuexitongApi.X
 	userId, _ := strconv.Atoi(cache.UserID)
 	pointAction, err := xuexitong.ChapterFetchPointAction(cache, nodes, &action, key, userId, courseItem.Cpi, courseId)
 	if err != nil {
-		monitor.GlobalEventBus.AddLog(a.Uid, "获取任务点失�? "+err.Error())
+		monitor.GlobalEventBus.AddLog(a.Uid, "⚠️ 获取任务点失败: "+err.Error())
 		return
 	}
 
@@ -417,7 +442,7 @@ func (a *XXTActivity) nodeRun(setting config.Setting, cache *xuexitongApi.XueXiT
 
 	_, fetchCards, err1 := xuexitong.ChapterFetchCardsAction(cache, &action, nodes, index, courseId, key, courseItem.Cpi)
 	if err1 != nil {
-		monitor.GlobalEventBus.AddLog(a.Uid, "获取卡片失败: "+err1.Error())
+		monitor.GlobalEventBus.AddLog(a.Uid, "⚠️ 获取卡片失败: "+err1.Error())
 		return
 	}
 
@@ -429,76 +454,117 @@ func (a *XXTActivity) nodeRun(setting config.Setting, cache *xuexitongApi.XueXiT
 	user := a.User
 
 	if videoDTOs != nil && user.CoursesCustom.VideoModel != 0 {
-		for _, videoDTO := range videoDTOs {
+		for i := range videoDTOs {
 			if !a.IsRunning() {
 				return
 			}
+			videoDTO := &videoDTOs[i]
 			card, enc, err2 := xuexitong.PageMobileChapterCardAction(cache, key, courseId, videoDTO.KnowledgeID, videoDTO.CardIndex, courseItem.Cpi)
 			if err2 != nil {
-				monitor.GlobalEventBus.AddLog(a.Uid, "视频卡片获取失败，重试中: "+err2.Error())
-				time.Sleep(3 * time.Second)
-				card, enc, err2 = xuexitong.PageMobileChapterCardAction(cache, key, courseId, videoDTO.KnowledgeID, videoDTO.CardIndex, courseItem.Cpi)
-				if err2 != nil {
-					monitor.GlobalEventBus.AddLog(a.Uid, "视频卡片重试仍失败: "+err2.Error())
-					continue
+				if strings.Contains(err2.Error(), "章节未开放") {
+					monitor.GlobalEventBus.AddLog(a.Uid, "⏭️ 章节未开放，跳过: "+videoDTO.Title)
+					break
 				}
+				if strings.Contains(err2.Error(), "没有历史人脸") {
+					monitor.GlobalEventBus.AddLog(a.Uid, "🚫 过人脸失败，该账号可能从未进行过人脸识别，请先进行一次人脸识别后再试")
+					return
+				}
+				if strings.Contains(err2.Error(), "活体检测失败") {
+					monitor.GlobalEventBus.AddLog(a.Uid, "🚫 过人脸失败，该账号所录入的人脸可能并不规范")
+					return
+				}
+				monitor.GlobalEventBus.AddLog(a.Uid, "⚠️ 视频卡片获取失败，跳过: "+videoDTO.Title+" - "+err2.Error())
+				continue
 			}
 			videoDTO.AttachmentsDetection(card)
 			if !videoDTO.IsJob {
-				monitor.GlobalEventBus.AddLog(a.Uid, fmt.Sprintf("非任务点视频，跳过: %s", videoDTO.Title))
+				monitor.GlobalEventBus.AddLog(a.Uid, "⏭️ 非任务点视频，跳过: "+videoDTO.Title)
 				continue
 			}
 			videoDTO.Enc = enc
 			if videoDTO.IsPassed {
-				monitor.GlobalEventBus.AddLog(a.Uid, fmt.Sprintf("视频已完成，跳过: %s", videoDTO.Title))
+				monitor.GlobalEventBus.AddLog(a.Uid, "⏭️ 视频已完成，跳过: "+videoDTO.Title)
 				continue
 			}
-			if !videoDTO.IsPassed && videoDTO.Attachment == nil && videoDTO.JobID == "" && videoDTO.Duration <= videoDTO.PlayTime {
+			if videoDTO.Attachment == nil && videoDTO.JobID == "" && videoDTO.Duration <= videoDTO.PlayTime {
+				monitor.GlobalEventBus.AddLog(a.Uid, "⏭️ 视频已播放完毕，跳过: "+videoDTO.Title)
 				continue
 			}
-			monitor.GlobalEventBus.AddLog(a.Uid, fmt.Sprintf("开始观看视频: %s (%d/%ds)", videoDTO.Title, videoDTO.PlayTime, videoDTO.Duration))
+			monitor.GlobalEventBus.AddLog(a.Uid, fmt.Sprintf("🎬 开始观看视频: %s (%d/%ds)", videoDTO.Title, videoDTO.PlayTime, videoDTO.Duration))
 			if videoDTO.Type == ctype.Video {
-				a.executeVideo(cache, courseItem, pointAction.Knowledge[index], &videoDTO, key, courseItem.Cpi)
+				a.executeVideo(cache, courseItem, pointAction.Knowledge[index], videoDTO, key, courseItem.Cpi)
 			} else if videoDTO.Type == ctype.InsertAudio {
-				a.executeAudio(cache, courseItem, pointAction.Knowledge[index], &videoDTO, key, courseItem.Cpi)
+				a.executeAudio(cache, courseItem, pointAction.Knowledge[index], videoDTO, key, courseItem.Cpi)
 			}
-			time.Sleep(time.Duration(rand.Intn(51)+10) * time.Second)
+			randSleepTime := rand.Intn(51) + 10
+			time.Sleep(time.Duration(randSleepTime) * time.Second)
 		}
 	}
 
 	if documentDTOs != nil && user.CoursesCustom.VideoModel != 0 {
-		for _, documentDTO := range documentDTOs {
+		for i := range documentDTOs {
 			if !a.IsRunning() {
 				return
 			}
+			documentDTO := &documentDTOs[i]
 			card, _, err2 := xuexitong.PageMobileChapterCardAction(cache, key, courseId, documentDTO.KnowledgeID, documentDTO.CardIndex, courseItem.Cpi)
 			if err2 != nil {
+				if strings.Contains(err2.Error(), "章节未开放") {
+					monitor.GlobalEventBus.AddLog(a.Uid, "⏭️ 该章节未开放，跳过")
+					break
+				}
+				if strings.Contains(err2.Error(), "没有历史人脸") {
+					monitor.GlobalEventBus.AddLog(a.Uid, "🚫 过人脸失败，该账号可能从未进行过人脸识别")
+					return
+				}
+				monitor.GlobalEventBus.AddLog(a.Uid, "⚠️ 文档卡片获取失败，跳过: "+err2.Error())
 				continue
 			}
 			documentDTO.AttachmentsDetection(card)
 			if !documentDTO.IsJob {
 				continue
 			}
-			point.ExecuteDocument(cache, &documentDTO)
+			point.ExecuteDocument(cache, documentDTO)
 			time.Sleep(5 * time.Second)
 		}
 	}
 
 	if workDTOs != nil && user.CoursesCustom.AutoExam != 0 && user.CoursesCustom.CxChapterTestSw != nil && *user.CoursesCustom.CxChapterTestSw == 1 {
-		for _, workDTO := range workDTOs {
+		for i := range workDTOs {
 			if !a.IsRunning() {
 				return
 			}
+			workDTO := &workDTOs[i]
 			mobileCard, _, err2 := xuexitong.PageMobileChapterCardAction(cache, key, courseId, workDTO.KnowledgeID, workDTO.CardIndex, courseItem.Cpi)
 			if err2 != nil {
+				if strings.Contains(err2.Error(), "章节未开放") {
+					monitor.GlobalEventBus.AddLog(a.Uid, "⏭️ 该章节未开放，跳过")
+					continue
+				}
+				if strings.Contains(err2.Error(), "没有历史人脸") {
+					monitor.GlobalEventBus.AddLog(a.Uid, "🚫 过人脸失败，该账号可能从未进行过人脸识别")
+					return
+				}
+				monitor.GlobalEventBus.AddLog(a.Uid, "⚠️ 作业卡片获取失败，跳过: "+err2.Error())
 				continue
 			}
 			flag, _ := workDTO.AttachmentsDetection(mobileCard)
-			questionAction, err2 := xuexitong.ParseWorkQuestionAction(cache, &workDTO)
+			questionAction, err2 := xuexitong.ParseWorkQuestionAction(cache, workDTO)
 			if err2 != nil {
+				if strings.Contains(err2.Error(), "已截止，不能作答") {
+					monitor.GlobalEventBus.AddLog(a.Uid, "⏭️ 作业已截止，跳过: "+questionAction.Title)
+					continue
+				}
 				continue
 			}
 			if !flag {
+				monitor.GlobalEventBus.AddLog(a.Uid, "⏭️ 作业已完成，跳过: "+questionAction.Title)
+				continue
+			}
+			if len(questionAction.Short) == 0 && len(questionAction.Choice) == 0 &&
+				len(questionAction.Judge) == 0 && len(questionAction.Fill) == 0 &&
+				len(questionAction.TermExplanation) == 0 && len(questionAction.Essay) == 0 {
+				monitor.GlobalEventBus.AddLog(a.Uid, "⏭️ 作业无题目，跳过: "+questionAction.Title)
 				continue
 			}
 			a.chapterTestAction(cache, questionAction, courseItem, pointAction.Knowledge[index])
@@ -506,42 +572,78 @@ func (a *XXTActivity) nodeRun(setting config.Setting, cache *xuexitongApi.XueXiT
 	}
 
 	if hyperlinkDTOs != nil && user.CoursesCustom.VideoModel != 0 {
-		for _, hyperlinkDTO := range hyperlinkDTOs {
+		for i := range hyperlinkDTOs {
 			if !a.IsRunning() {
 				return
 			}
+			hyperlinkDTO := &hyperlinkDTOs[i]
 			card, _, err2 := xuexitong.PageMobileChapterCardAction(cache, key, courseId, hyperlinkDTO.KnowledgeID, hyperlinkDTO.CardIndex, courseItem.Cpi)
 			if err2 != nil {
+				if strings.Contains(err2.Error(), "章节未开放") {
+					monitor.GlobalEventBus.AddLog(a.Uid, "⏭️ 该章节未开放，跳过")
+					continue
+				}
+				if strings.Contains(err2.Error(), "没有历史人脸") {
+					monitor.GlobalEventBus.AddLog(a.Uid, "🚫 过人脸失败，该账号可能从未进行过人脸识别")
+					return
+				}
+				monitor.GlobalEventBus.AddLog(a.Uid, "⚠️ 外链卡片获取失败，跳过: "+err2.Error())
 				continue
 			}
 			hyperlinkDTO.AttachmentsDetection(card)
-			point.ExecuteHyperlink(cache, &hyperlinkDTO)
+			point.ExecuteHyperlink(cache, hyperlinkDTO)
 			time.Sleep(5 * time.Second)
 		}
 	}
 
 	if liveDTOs != nil && user.CoursesCustom.VideoModel != 0 {
-		for _, liveDTO := range liveDTOs {
+		for i := range liveDTOs {
 			if !a.IsRunning() {
 				return
 			}
+			liveDTO := &liveDTOs[i]
 			card, _, err2 := xuexitong.PageMobileChapterCardAction(cache, key, courseId, liveDTO.KnowledgeID, liveDTO.CardIndex, courseItem.Cpi)
 			if err2 != nil {
+				if strings.Contains(err2.Error(), "章节未开放") {
+					monitor.GlobalEventBus.AddLog(a.Uid, "⏭️ 该章节未开放，跳过")
+					continue
+				}
+				if strings.Contains(err2.Error(), "没有历史人脸") {
+					monitor.GlobalEventBus.AddLog(a.Uid, "🚫 过人脸失败，该账号可能从未进行过人脸识别")
+					return
+				}
+				monitor.GlobalEventBus.AddLog(a.Uid, "⚠️ 直播卡片获取失败，跳过: "+err2.Error())
 				continue
 			}
 			liveDTO.AttachmentsDetection(card)
 			if !liveDTO.IsJob {
 				continue
 			}
-			point.PullLiveInfoAction(cache, &liveDTO)
+			point.PullLiveInfoAction(cache, liveDTO)
 			if liveDTO.LiveStatusCode == 0 {
+				monitor.GlobalEventBus.AddLog(a.Uid, "⏭️ 直播未开播，跳过: "+liveDTO.Title)
 				continue
 			}
-			point.LiveCreateRelationAction(cache, &liveDTO)
+			relationReport, err2 := point.LiveCreateRelationAction(cache, liveDTO)
+			if err2 != nil {
+				monitor.GlobalEventBus.AddLog(a.Uid, "⚠️ 直播建立联系失败: "+relationReport+" "+err2.Error())
+			} else {
+				monitor.GlobalEventBus.AddLog(a.Uid, "📡 直播建立联系成功: "+relationReport)
+			}
 			for {
-				point.ExecuteLive(cache, &liveDTO)
-				point.PullLiveInfoAction(cache, &liveDTO)
+				if !a.IsRunning() {
+					return
+				}
+				report, err := point.ExecuteLive(cache, liveDTO)
+				point.PullLiveInfoAction(cache, liveDTO)
+				if err != nil {
+					monitor.GlobalEventBus.AddLog(a.Uid, "⚠️ 直播提交异常: "+report+" "+err.Error())
+				}
+				if strings.Contains(report, "@success") {
+					monitor.GlobalEventBus.AddLog(a.Uid, fmt.Sprintf("直播任务点状态: %s 进度: %.2f%%", report, liveDTO.VideoCompletePercent))
+				}
 				if liveDTO.VideoCompletePercent >= 90 {
+					monitor.GlobalEventBus.AddLog(a.Uid, "✅ 直播任务点已完成: "+liveDTO.Title)
 					break
 				}
 				time.Sleep(30 * time.Second)
@@ -550,26 +652,47 @@ func (a *XXTActivity) nodeRun(setting config.Setting, cache *xuexitongApi.XueXiT
 	}
 
 	if bbsDTOs != nil && user.CoursesCustom.AutoExam != 0 {
-		for _, bbsDTO := range bbsDTOs {
+		for i := range bbsDTOs {
 			if !a.IsRunning() {
 				return
 			}
+			bbsDTO := &bbsDTOs[i]
 			card, _, err2 := xuexitong.PageMobileChapterCardAction(cache, key, courseId, bbsDTO.KnowledgeID, bbsDTO.CardIndex, courseItem.Cpi)
 			if err2 != nil {
+				if strings.Contains(err2.Error(), "章节未开放") {
+					monitor.GlobalEventBus.AddLog(a.Uid, "⏭️ 该章节未开放，跳过")
+					continue
+				}
+				if strings.Contains(err2.Error(), "没有历史人脸") {
+					monitor.GlobalEventBus.AddLog(a.Uid, "🚫 过人脸失败，该账号可能从未进行过人脸识别")
+					return
+				}
+				monitor.GlobalEventBus.AddLog(a.Uid, "⚠️ 讨论卡片获取失败，跳过: "+err2.Error())
 				continue
 			}
 			bbsDTO.AttachmentsDetection(card)
 			if !bbsDTO.IsJob {
 				continue
 			}
-			bbsTopic, err1 := point.PullPhoneBbsInfoAction(cache, &bbsDTO)
-			if bbsTopic == nil || err1 != nil {
+			bbsTopic, err1 := point.PullPhoneBbsInfoAction(cache, bbsDTO)
+			if bbsTopic == nil {
+				monitor.GlobalEventBus.AddLog(a.Uid, "⏭️ 无法拉取讨论主题，跳过: "+bbsDTO.Title)
 				continue
 			}
+			if err1 != nil {
+				monitor.GlobalEventBus.AddLog(a.Uid, "⚠️ 讨论拉取异常: "+err1.Error())
+			}
+			var report string
+			var err error
 			if user.CoursesCustom.AutoExam == 1 {
-				bbsTopic.AIAnswer(cache, &bbsDTO, setting.AiSetting.AiUrl, setting.AiSetting.Model, setting.AiSetting.AiType, setting.AiSetting.APIKEY)
+				report, err = bbsTopic.AIAnswer(cache, bbsDTO, setting.AiSetting.AiUrl, setting.AiSetting.Model, setting.AiSetting.AiType, setting.AiSetting.APIKEY)
 			} else if user.CoursesCustom.AutoExam == 2 {
-				bbsTopic.ExternalAnswer(cache, &bbsDTO, setting.ApiQueSetting.Url)
+				report, err = bbsTopic.ExternalAnswer(cache, bbsDTO, setting.ApiQueSetting.Url)
+			} else if user.CoursesCustom.AutoExam == 3 {
+				report, err = bbsTopic.XXTAIAnswer(cache, bbsDTO)
+			}
+			if err != nil {
+				monitor.GlobalEventBus.AddLog(a.Uid, "⚠️ 讨论提交异常: "+report+" "+err.Error())
 			}
 			time.Sleep(5 * time.Second)
 		}
@@ -577,24 +700,7 @@ func (a *XXTActivity) nodeRun(setting config.Setting, cache *xuexitongApi.XueXiT
 }
 
 func (a *XXTActivity) executeVideo(cache *xuexitongApi.XueXiTUserCache, courseItem *xuexitong.XueXiTCourse, knowledgeItem xuexitong.KnowledgeItem, p *xuexitongApi.PointVideoDto, key, courseCpi int) {
-	state, fetchErr := xuexitong.VideoDtoFetchAction(cache, p)
-	if !state {
-		if fetchErr != nil {
-			monitor.GlobalEventBus.AddLog(a.Uid, fmt.Sprintf("视频信息获取失败，重试: %s - %s", p.Title, fetchErr.Error()))
-		}
-		time.Sleep(3 * time.Second)
-		xuexitong.ReLogin(cache)
-		state, fetchErr = xuexitong.VideoDtoFetchAction(cache, p)
-		if !state {
-			if fetchErr != nil {
-				monitor.GlobalEventBus.AddLog(a.Uid, fmt.Sprintf("视频信息重试仍失败: %s - %s", p.Title, fetchErr.Error()))
-			} else {
-				monitor.GlobalEventBus.AddLog(a.Uid, fmt.Sprintf("视频信息获取失败(状态异常): %s", p.Title))
-			}
-			return
-		}
-	}
-	{
+	if state, _ := xuexitong.VideoDtoFetchAction(cache, p); state {
 		playingTime := p.PlayTime
 		if !p.IsPassed && p.PlayTime == p.Duration {
 			playingTime = 0
@@ -604,7 +710,6 @@ func (a *XXTActivity) executeVideo(cache *xuexitongApi.XueXiTUserCache, courseIt
 		extendSec := 5
 		limitTime := max(500, p.Duration/2)
 		mode := 1
-
 		for {
 			if !a.IsRunning() {
 				return
@@ -621,54 +726,77 @@ func (a *XXTActivity) executeVideo(cache *xuexitongApi.XueXiTUserCache, courseIt
 				playReport, err = xuexitong.VideoSubmitStudyTimeAction(cache, p, playingTime, mode, 0)
 			}
 			if err != nil {
-				if strings.Contains(err.Error(), "status code: 500") {
+				if strings.Contains(err.Error(), "failed to fetch video, status code: 500") {
+					monitor.GlobalEventBus.AddLog(a.Uid, fmt.Sprintf("视频触发风控500，跳过: %s - %s", p.Title, err.Error()))
 					break
 				}
-				if strings.Contains(err.Error(), "status code: 403") {
+				if strings.Contains(err.Error(), "failed to fetch video, status code: 403") {
 					if mode == 1 {
 						mode = 0
+						monitor.GlobalEventBus.AddLog(a.Uid, fmt.Sprintf("视频触发403，切换为Web端: %s", p.Title))
 						continue
 					}
-					_, img, err2 := cache.GetHistoryFaceImg("")
+					monitor.GlobalEventBus.AddLog(a.Uid, fmt.Sprintf("视频触发403(Web端)，尝试绕过人脸: %s", p.Title))
+					pullJson, img, err2 := cache.GetHistoryFaceImg("")
 					if err2 != nil {
+						monitor.GlobalEventBus.AddLog(a.Uid, fmt.Sprintf("上传人脸失败，跳过该视频: %s - %s %s", p.Title, pullJson, err2))
 						return
 					}
 					disturbImage := utils.ImageRGBDisturb(img)
-					xuexitong.PassFacePCAction(cache, p.CourseID, p.ClassID, p.Cpi, fmt.Sprintf("%d", p.KnowledgeID), p.Enc, p.JobID, p.ObjectID, p.Mid, p.RandomCaptureTime, disturbImage)
+					_, _, _, _, errPass := xuexitong.PassFacePCAction(cache, p.CourseID, p.ClassID, p.Cpi, fmt.Sprintf("%d", p.KnowledgeID), p.Enc, p.JobID, p.ObjectID, p.Mid, p.RandomCaptureTime, disturbImage)
+					if errPass != nil {
+						monitor.GlobalEventBus.AddLog(a.Uid, fmt.Sprintf("绕过人脸失败: %s - %s", p.Title, errPass.Error()))
+					} else {
+						monitor.GlobalEventBus.AddLog(a.Uid, fmt.Sprintf("绕过人脸成功: %s", p.Title))
+					}
 					time.Sleep(5 * time.Second)
 					continue
 				}
-				if strings.Contains(err.Error(), "status code: 404") {
+				if strings.Contains(err.Error(), "failed to fetch video, status code: 404") {
 					time.Sleep(10 * time.Second)
 					continue
 				}
+			}
+			if err != nil {
+				monitor.GlobalEventBus.AddLog(a.Uid, fmt.Sprintf("视频提交学时异常，跳过: %s - %s", p.Title, err.Error()))
 				break
 			}
 			if gojsonq.New().JSONString(playReport).Find("isPassed") == nil {
+				monitor.GlobalEventBus.AddLog(a.Uid, fmt.Sprintf("视频提交学时返回异常，跳过: %s - %s", p.Title, playReport))
 				break
 			}
 			outTimeMsg := gojsonq.New().JSONString(playReport).Find("OutTimeMsg")
-		if outTimeMsg != nil {
-			if msg, ok := outTimeMsg.(string); ok && msg == "观看时长超过阈值" {
-				monitor.GlobalEventBus.AddLog(a.Uid, fmt.Sprintf("视频超时完成: %s", p.Title))
+			if outTimeMsg != nil {
+				if msg, ok := outTimeMsg.(string); ok && msg == "观看时长超过阈值" {
+					monitor.GlobalEventBus.AddLog(a.Uid, fmt.Sprintf("视频超时完成: %s %d/%d %.2f%%", p.Title, p.Duration, p.Duration, float32(p.Duration)/float32(p.Duration)*100))
+					break
+				}
+			}
+			isPassed, ok := gojsonq.New().JSONString(playReport).Find("isPassed").(bool)
+			if ok && isPassed && playingTime >= p.Duration {
+				if overTime == 0 {
+					monitor.GlobalEventBus.AddLog(a.Uid, fmt.Sprintf("视频完成: %s %d/%d %.2f%%", p.Title, p.Duration, p.Duration, float32(p.Duration)/float32(p.Duration)*100))
+				} else {
+					monitor.GlobalEventBus.AddLog(a.Uid, fmt.Sprintf("视频过超提交成功: %s %d/%d 过超:%d/%d %.2f%%", p.Title, p.Duration, p.Duration, overTime, limitTime, float32(p.Duration)/float32(p.Duration)*100))
+				}
 				break
 			}
-		}
-		isPassed, ok := gojsonq.New().JSONString(playReport).Find("isPassed").(bool)
-		if ok && isPassed && playingTime >= p.Duration {
-			monitor.GlobalEventBus.AddLog(a.Uid, fmt.Sprintf("视频完成: %s %d/%d", p.Title, p.Duration, p.Duration))
-			break
-		}
-			if ok {
-				monitor.GlobalEventBus.AddLog(a.Uid, fmt.Sprintf("视频: %s %d/%d %.1f%%", p.Title, playingTime, p.Duration, float32(playingTime)/float32(p.Duration)*100))
+			if overTime == 0 {
+				monitor.GlobalEventBus.AddLog(a.Uid, fmt.Sprintf("视频: %s %d/%d %.2f%%", p.Title, playingTime, p.Duration, float32(playingTime)/float32(p.Duration)*100))
+			} else {
+				monitor.GlobalEventBus.AddLog(a.Uid, fmt.Sprintf("视频(过超): %s %d/%d 过超:%d/%d %.2f%%", p.Title, playingTime, p.Duration, overTime, limitTime, float32(playingTime)/float32(p.Duration)*100))
 			}
 			if overTime >= limitTime {
+				monitor.GlobalEventBus.AddLog(a.Uid, fmt.Sprintf("视频过超提交失败，跳过: %s", p.Title))
 				break
 			}
 			if p.Duration-playingTime < selectSec && p.Duration != playingTime {
+				remainingTime := p.Duration - playingTime
 				playingTime = p.Duration
+				time.Sleep(time.Duration(remainingTime) * time.Second)
 			} else if p.Duration == playingTime {
 				if p.JobID == "" && p.Attachment == nil {
+					monitor.GlobalEventBus.AddLog(a.Uid, fmt.Sprintf("非任务点视频播放完毕: %s", p.Title))
 					break
 				}
 				overTime += extendSec
@@ -678,36 +806,22 @@ func (a *XXTActivity) executeVideo(cache *xuexitongApi.XueXiTUserCache, courseIt
 				time.Sleep(time.Duration(selectSec) * time.Second)
 			}
 		}
+	} else {
+		monitor.GlobalEventBus.AddLog(a.Uid, fmt.Sprintf("视频任务点解析失败，可能是视频本身问题，跳过: %s", p.Title))
 	}
 }
 
 func (a *XXTActivity) executeAudio(cache *xuexitongApi.XueXiTUserCache, courseItem *xuexitong.XueXiTCourse, knowledgeItem xuexitong.KnowledgeItem, p *xuexitongApi.PointVideoDto, key, courseCpi int) {
-	state, fetchErr := xuexitong.VideoDtoFetchAction(cache, p)
-	if !state {
-		if fetchErr != nil {
-			monitor.GlobalEventBus.AddLog(a.Uid, fmt.Sprintf("音频信息获取失败，重试: %s - %s", p.Title, fetchErr.Error()))
-		}
-		time.Sleep(3 * time.Second)
-		xuexitong.ReLogin(cache)
-		state, fetchErr = xuexitong.VideoDtoFetchAction(cache, p)
-		if !state {
-			if fetchErr != nil {
-				monitor.GlobalEventBus.AddLog(a.Uid, fmt.Sprintf("音频信息重试仍失败: %s - %s", p.Title, fetchErr.Error()))
-			}
-			return
-		}
-	}
-	{
+	if state, _ := xuexitong.VideoDtoFetchAction(cache, p); state {
 		playingTime := p.PlayTime
 		if !p.IsPassed && p.PlayTime == p.Duration {
 			playingTime = 0
 		}
-		mode := 1
+		overTime := 0
 		selectSec := 58
 		extendSec := 5
-		overTime := 0
 		limitTime := max(500, p.Duration/2)
-
+		mode := 1
 		for {
 			if !a.IsRunning() {
 				return
@@ -724,26 +838,77 @@ func (a *XXTActivity) executeAudio(cache *xuexitongApi.XueXiTUserCache, courseIt
 				playReport, err = xuexitong.AudioSubmitStudyTimeAction(cache, p, playingTime, mode, 0)
 			}
 			if err != nil {
-				if strings.Contains(err.Error(), "status code: 500") || strings.Contains(err.Error(), "status code: 403") {
+				if strings.Contains(err.Error(), "failed to fetch video, status code: 500") {
+					monitor.GlobalEventBus.AddLog(a.Uid, fmt.Sprintf("音频触发风控500，跳过: %s - %s", p.Title, err.Error()))
 					break
 				}
+				if strings.Contains(err.Error(), "failed to fetch video, status code: 403") {
+					if mode == 1 {
+						mode = 0
+						monitor.GlobalEventBus.AddLog(a.Uid, fmt.Sprintf("音频触发403，切换为Web端: %s", p.Title))
+						continue
+					}
+					monitor.GlobalEventBus.AddLog(a.Uid, fmt.Sprintf("音频触发403(Web端)，尝试绕过人脸: %s", p.Title))
+					pullJson, img, err2 := cache.GetHistoryFaceImg("")
+					if err2 != nil {
+						monitor.GlobalEventBus.AddLog(a.Uid, fmt.Sprintf("上传人脸失败，跳过该音频: %s - %s %s", p.Title, pullJson, err2))
+						return
+					}
+					disturbImage := utils.ImageRGBDisturb(img)
+					_, _, _, _, errPass := xuexitong.PassFacePCAction(cache, p.CourseID, p.ClassID, p.Cpi, fmt.Sprintf("%d", p.KnowledgeID), p.Enc, p.JobID, p.ObjectID, p.Mid, p.RandomCaptureTime, disturbImage)
+					if errPass != nil {
+						monitor.GlobalEventBus.AddLog(a.Uid, fmt.Sprintf("绕过人脸失败: %s - %s", p.Title, errPass.Error()))
+					} else {
+						monitor.GlobalEventBus.AddLog(a.Uid, fmt.Sprintf("绕过人脸成功: %s", p.Title))
+					}
+					time.Sleep(5 * time.Second)
+					continue
+				}
+				if strings.Contains(err.Error(), "failed to fetch video, status code: 404") {
+					time.Sleep(10 * time.Second)
+					continue
+				}
+			}
+			if err != nil {
+				monitor.GlobalEventBus.AddLog(a.Uid, fmt.Sprintf("音频提交学时异常，跳过: %s - %s", p.Title, err.Error()))
 				break
 			}
 			if gojsonq.New().JSONString(playReport).Find("isPassed") == nil {
+				monitor.GlobalEventBus.AddLog(a.Uid, fmt.Sprintf("音频提交学时返回异常，跳过: %s - %s", p.Title, playReport))
 				break
 			}
+			outTimeMsg := gojsonq.New().JSONString(playReport).Find("OutTimeMsg")
+			if outTimeMsg != nil {
+				if msg, ok := outTimeMsg.(string); ok && msg == "观看时长超过阈值" {
+					monitor.GlobalEventBus.AddLog(a.Uid, fmt.Sprintf("音频超时完成: %s %d/%d %.2f%%", p.Title, p.Duration, p.Duration, float32(p.Duration)/float32(p.Duration)*100))
+					break
+				}
+			}
 			isPassed, ok := gojsonq.New().JSONString(playReport).Find("isPassed").(bool)
-		if ok && isPassed && playingTime >= p.Duration {
-			monitor.GlobalEventBus.AddLog(a.Uid, fmt.Sprintf("音频完成: %s", p.Title))
-			break
+			if ok && isPassed && playingTime >= p.Duration {
+				if overTime == 0 {
+					monitor.GlobalEventBus.AddLog(a.Uid, fmt.Sprintf("音频完成: %s %d/%d %.2f%%", p.Title, p.Duration, p.Duration, float32(p.Duration)/float32(p.Duration)*100))
+				} else {
+					monitor.GlobalEventBus.AddLog(a.Uid, fmt.Sprintf("音频过超提交成功: %s %d/%d 过超:%d/%d %.2f%%", p.Title, p.Duration, p.Duration, overTime, limitTime, float32(p.Duration)/float32(p.Duration)*100))
+				}
+				break
+			}
+			if overTime == 0 {
+				monitor.GlobalEventBus.AddLog(a.Uid, fmt.Sprintf("音频: %s %d/%d %.2f%%", p.Title, playingTime, p.Duration, float32(playingTime)/float32(p.Duration)*100))
+			} else {
+				monitor.GlobalEventBus.AddLog(a.Uid, fmt.Sprintf("音频(过超): %s %d/%d 过超:%d/%d %.2f%%", p.Title, playingTime, p.Duration, overTime, limitTime, float32(playingTime)/float32(p.Duration)*100))
 			}
 			if overTime >= limitTime {
+				monitor.GlobalEventBus.AddLog(a.Uid, fmt.Sprintf("音频过超提交失败，跳过: %s", p.Title))
 				break
 			}
 			if p.Duration-playingTime < selectSec && p.Duration != playingTime {
+				remainingTime := p.Duration - playingTime
 				playingTime = p.Duration
+				time.Sleep(time.Duration(remainingTime) * time.Second)
 			} else if p.Duration == playingTime {
 				if p.JobID == "" && p.Attachment == nil {
+					monitor.GlobalEventBus.AddLog(a.Uid, fmt.Sprintf("非任务点音频播放完毕: %s", p.Title))
 					break
 				}
 				overTime += extendSec
@@ -753,6 +918,8 @@ func (a *XXTActivity) executeAudio(cache *xuexitongApi.XueXiTUserCache, courseIt
 				time.Sleep(time.Duration(selectSec) * time.Second)
 			}
 		}
+	} else {
+		monitor.GlobalEventBus.AddLog(a.Uid, fmt.Sprintf("音频任务点解析失败，可能是音频本身问题，跳过: %s", p.Title))
 	}
 }
 
@@ -764,12 +931,12 @@ func (a *XXTActivity) writeCourseWorkAndExam(setting config.Setting, cache *xuex
 
 	if user.CoursesCustom.AutoExam == 1 {
 		if err := aiq.AICheck(setting.AiSetting.AiUrl, setting.AiSetting.Model, setting.AiSetting.APIKEY, setting.AiSetting.AiType); err != nil {
-			monitor.GlobalEventBus.AddLog(a.Uid, "AI检查失�? "+err.Error())
+			monitor.GlobalEventBus.AddLog(a.Uid, "⚠️ AI检查失败: "+err.Error())
 			return
 		}
 	} else if user.CoursesCustom.AutoExam == 2 {
 		if err := external.CheckApiQueRequest(setting.ApiQueSetting.Url, 5, nil); err != nil {
-			monitor.GlobalEventBus.AddLog(a.Uid, "外置题库检查失�? "+err.Error())
+			monitor.GlobalEventBus.AddLog(a.Uid, "⚠️ 外置题库检查失败: "+err.Error())
 			return
 		}
 	}
@@ -781,7 +948,7 @@ func (a *XXTActivity) writeCourseWorkAndExam(setting config.Setting, cache *xuex
 				if !a.IsRunning() {
 					return
 				}
-				if work.Status != "todo" && work.Status != "undone" && work.Status != "redo" {
+				if work.Status != "待做" && work.Status != "未交" && work.Status != "待重做" {
 					continue
 				}
 				err2 := xuexitong.EnterWorkAction(cache, &work)
@@ -800,7 +967,7 @@ func (a *XXTActivity) writeCourseWorkAndExam(setting config.Setting, cache *xuex
 				if !a.IsRunning() {
 					return
 				}
-				if exam.Status != "todo" && exam.Status != "retake" {
+				if exam.Status != "待做" && exam.Status != "待重考" {
 					continue
 				}
 				err2 := xuexitong.EnterExamAction(cache, &exam)
@@ -875,20 +1042,68 @@ func (a *XXTActivity) chapterTestAction(cache *xuexitongApi.XueXiTUserCache, que
 		}
 		time.Sleep(time.Duration(rand.Intn(stopEnd-stopStart)+stopStart) * time.Second)
 	}
+	for i := range questionAction.TermExplanation {
+		q := &questionAction.TermExplanation[i]
+		switch user.CoursesCustom.AutoExam {
+		case 1:
+			message := xuexitong.AIProblemMessage(questionAction.Title, q.Type.String(), xuexitongApi.ExamTurn{XueXTermExplanationQue: *q})
+			q.AnswerAIGet(cache.UserID, setting.AiSetting.AiUrl, setting.AiSetting.Model, setting.AiSetting.AiType, message, setting.AiSetting.APIKEY)
+		case 2:
+			q.AnswerExternalGet(setting.ApiQueSetting.Url)
+		case 3:
+			message := xuexitong.AIProblemMessage(questionAction.Title, q.Type.String(), xuexitongApi.ExamTurn{XueXTermExplanationQue: *q})
+			q.AnswerXXTAIGet(cache, questionAction.ClassId, questionAction.CourseId, questionAction.Cpi, message)
+		}
+		time.Sleep(time.Duration(rand.Intn(stopEnd-stopStart)+stopStart) * time.Second)
+	}
+	for i := range questionAction.Essay {
+		q := &questionAction.Essay[i]
+		switch user.CoursesCustom.AutoExam {
+		case 1:
+			message := xuexitong.AIProblemMessage(questionAction.Title, q.Type.String(), xuexitongApi.ExamTurn{XueXEssayQue: *q})
+			q.AnswerAIGet(cache.UserID, setting.AiSetting.AiUrl, setting.AiSetting.Model, setting.AiSetting.AiType, message, setting.AiSetting.APIKEY)
+		case 2:
+			q.AnswerExternalGet(setting.ApiQueSetting.Url)
+		case 3:
+			message := xuexitong.AIProblemMessage(questionAction.Title, q.Type.String(), xuexitongApi.ExamTurn{XueXEssayQue: *q})
+			q.AnswerXXTAIGet(cache, questionAction.ClassId, questionAction.CourseId, questionAction.Cpi, message)
+		}
+		time.Sleep(time.Duration(rand.Intn(stopEnd-stopStart)+stopStart) * time.Second)
+	}
+	for i := range questionAction.Matching {
+		q := &questionAction.Matching[i]
+		switch user.CoursesCustom.AutoExam {
+		case 1:
+			message := xuexitong.AIProblemMessage(questionAction.Title, q.Type.String(), xuexitongApi.ExamTurn{XueXMatchingQue: *q})
+			q.AnswerAIGet(cache.UserID, setting.AiSetting.AiUrl, setting.AiSetting.Model, setting.AiSetting.AiType, message, setting.AiSetting.APIKEY)
+		case 2:
+			q.AnswerExternalGet(setting.ApiQueSetting.Url)
+		case 3:
+			message := xuexitong.AIProblemMessage(questionAction.Title, q.Type.String(), xuexitongApi.ExamTurn{XueXMatchingQue: *q})
+			q.AnswerXXTAIGet(cache, questionAction.ClassId, questionAction.CourseId, questionAction.Cpi, message)
+		}
+		time.Sleep(time.Duration(rand.Intn(stopEnd-stopStart)+stopStart) * time.Second)
+	}
 
 	xuexitong.AnswerFixedPattern(questionAction.Choice, questionAction.Judge)
-	if user.CoursesCustom.ExamAutoSubmit == 1 {
-		xuexitong.WorkNewSubmitAnswerAction(cache, questionAction, true)
-	} else {
+	if user.CoursesCustom.ExamAutoSubmit == 0 {
 		xuexitong.WorkNewSubmitAnswerAction(cache, questionAction, false)
+	} else if user.CoursesCustom.ExamAutoSubmit == 1 {
+		xuexitong.WorkNewSubmitAnswerAction(cache, questionAction, true)
+	} else if user.CoursesCustom.ExamAutoSubmit == 2 {
+		if checkAnswerIsAvoid(questionAction.Choice, questionAction.Judge, questionAction.Fill, questionAction.Short) {
+			xuexitong.WorkNewSubmitAnswerAction(cache, questionAction, false)
+		} else {
+			xuexitong.WorkNewSubmitAnswerAction(cache, questionAction, true)
+		}
 	}
-	monitor.GlobalEventBus.AddLog(a.Uid, "章节测试完成: "+questionAction.Title)
+	monitor.GlobalEventBus.AddLog(a.Uid, "✅ 章节测试完成: "+questionAction.Title)
 }
 
 func (a *XXTActivity) workAction(cache *xuexitongApi.XueXiTUserCache, work xuexitong.XXTWork, courseItem *xuexitong.XueXiTCourse) {
 	user := a.User
 	setting := a.Setting
-	monitor.GlobalEventBus.AddLog(a.Uid, "正在做作�? "+work.Name)
+	monitor.GlobalEventBus.AddLog(a.Uid, "📝 正在做作业: "+work.Name)
 	for i := range work.QuestionTotal {
 		if !a.IsRunning() {
 			return
@@ -911,7 +1126,7 @@ func (a *XXTActivity) workAction(cache *xuexitongApi.XueXiTUserCache, work xuexi
 			monitor.GlobalEventBus.AddLog(a.Uid, fmt.Sprintf("作业提交成功 Q%d: %s", i+1, submitResult))
 		}
 	}
-	monitor.GlobalEventBus.AddLog(a.Uid, "作业完成: "+work.Name)
+	monitor.GlobalEventBus.AddLog(a.Uid, "✅ 作业完成: "+work.Name)
 }
 
 func (a *XXTActivity) examAction(cache *xuexitongApi.XueXiTUserCache, exam xuexitong.XXTExam, courseItem *xuexitong.XueXiTCourse) {
@@ -943,11 +1158,71 @@ func (a *XXTActivity) examAction(cache *xuexitongApi.XueXiTUserCache, exam xuexi
 		} else {
 			monitor.GlobalEventBus.AddLog(a.Uid, fmt.Sprintf("考试提交成功 Q%d", i+1))
 		}
-		if strings.Contains(submitResult, "time_used") || strings.Contains(submitResult, "expired") {
+		re := regexp.MustCompile(`考试(\d+)分钟内不允许提交考试`)
+		matches := re.FindStringSubmatch(submitResult)
+		if len(matches) > 1 {
+			minSubmitTime, _ := strconv.Atoi(matches[1])
+			monitor.GlobalEventBus.AddLog(a.Uid, fmt.Sprintf("检测到该考试限制开考%d分钟内不允许提交，已自动延时%d分钟...", minSubmitTime, minSubmitTime))
+			time.Sleep(time.Duration(minSubmitTime) * time.Minute)
+			submitResult, err3 = question.SubmitExamAnswerAction(cache, isSubmit)
+		}
+		if strings.Contains(submitResult, "考试时间已用完") || strings.Contains(submitResult, "time_used") || strings.Contains(submitResult, "expired") {
+			monitor.GlobalEventBus.AddLog(a.Uid, "考试时间已用完，跳过: "+exam.Name)
 			break
 		}
 	}
-	monitor.GlobalEventBus.AddLog(a.Uid, "考试完成: "+exam.Name)
+	monitor.GlobalEventBus.AddLog(a.Uid, "✅ 考试完成: "+exam.Name)
+}
+
+func checkAnswerIsAvoid(choices []xuexitongApi.ChoiceQue, judges []xuexitongApi.JudgeQue, fills []xuexitongApi.FillQue, shorts []xuexitongApi.ShortQue) bool {
+	for _, choice := range choices {
+		resStatus := true
+		if choice.Answers != nil {
+			candidateSelects := []string{}
+			for _, option := range choice.Options {
+				candidateSelects = append(candidateSelects, option)
+			}
+			for _, answer := range choice.Answers {
+				var sortArray []qutils.Co = qutils.SimilarityArrayAndSort(answer, candidateSelects)
+				if sortArray[0].Score >= 0.9 {
+					resStatus = false
+				}
+			}
+			if resStatus {
+				return true
+			}
+		} else {
+			return true
+		}
+	}
+	for _, judge := range judges {
+		resStatus := true
+		if judge.Answers != nil {
+			for _, answer := range judge.Answers {
+				for _, option := range judge.Options {
+					if answer == option || answer == "\u9519\u8bef" || answer == "\u6b63\u786e" {
+						resStatus = false
+					}
+				}
+			}
+			if resStatus {
+				return true
+			}
+		} else {
+			return true
+		}
+	}
+	for _, fill := range fills {
+		if fill.OpFromAnswer == nil || len(fill.OpFromAnswer) <= 0 {
+			return true
+		}
+	}
+	for _, short := range shorts {
+		if short.OpFromAnswer == nil || len(short.OpFromAnswer) <= 0 {
+			return true
+		}
+	}
+	return false
 }
 
 // ==================== YINGHUA ====================
@@ -963,19 +1238,20 @@ func (a *YingHuaActivity) Login() error {
 	}
 	err1 := yinghua.YingHuaLoginAction(cache)
 	if err1 != nil {
-		monitor.GlobalEventBus.SetError(a.Uid, "��¼ʧ��: "+err1.Error())
+		monitor.GlobalEventBus.SetError(a.Uid, "❌ 登录失败: "+err1.Error())
 		return err1
 	}
 	a.UserCache = cache
-	monitor.GlobalEventBus.AddLog(a.Uid, "登录成功: "+cache.Account)
+	monitor.GlobalEventBus.AddLog(a.Uid, "🔑 登录成功: "+cache.Account)
 	return nil
 }
 
 func (a *YingHuaActivity) Start() error {
 	a.setStopped(false)
+	a.setPaused(false)
 	a.setRunning(true)
 	monitor.GlobalEventBus.UpdateStatus(a.Uid, monitor.StatusRunning)
-	monitor.GlobalEventBus.AddLog(a.Uid, "开始刷课任�?..")
+	monitor.GlobalEventBus.AddLog(a.Uid, "🚀 开始刷课任务...")
 	go a.run()
 	return nil
 }
@@ -984,14 +1260,15 @@ func (a *YingHuaActivity) Stop() error {
 	a.setStopped(true)
 	a.setRunning(false)
 	monitor.GlobalEventBus.UpdateStatus(a.Uid, monitor.StatusStopped)
-	monitor.GlobalEventBus.AddLog(a.Uid, "任务已停止")
+	monitor.GlobalEventBus.AddLog(a.Uid, "⏹️ 任务已停止")
 	return nil
 }
 
 func (a *YingHuaActivity) Pause() error {
 	a.setRunning(false)
+	a.setPaused(true)
 	monitor.GlobalEventBus.UpdateStatus(a.Uid, monitor.StatusPaused)
-	monitor.GlobalEventBus.AddLog(a.Uid, "任务已暂停")
+	monitor.GlobalEventBus.AddLog(a.Uid, "⏸️ 任务已暂停")
 	return nil
 }
 
@@ -1002,16 +1279,16 @@ func (a *YingHuaActivity) run() {
 			monitor.GlobalEventBus.SetError(a.Uid, fmt.Sprintf("Panic: %v", r))
 			return
 		}
-		if !a.isStopped() {
+		if !a.isStopped() && !a.isPaused() {
 			monitor.GlobalEventBus.UpdateStatus(a.Uid, monitor.StatusCompleted)
 			a.sendCompletionEmail()
-			monitor.GlobalEventBus.UpdateProgress(a.Uid, 100, "���пγ�ѧϰ���")
+			monitor.GlobalEventBus.UpdateProgress(a.Uid, 100, "\u6240\u6709\u8bfe\u7a0b\u5b66\u4e60\u5b8c\u6bd5")
 		}
 	}()
 
 	if a.UserCache == nil {
 		monitor.GlobalEventBus.UpdateStatus(a.Uid, monitor.StatusLogging)
-		monitor.GlobalEventBus.AddLog(a.Uid, "正在登录...")
+		monitor.GlobalEventBus.AddLog(a.Uid, "🔑 正在登录...")
 		if err := a.Login(); err != nil {
 			return
 		}
@@ -1051,7 +1328,7 @@ func (a *YingHuaActivity) nodeListStudy(cache *yinghuaApi.YingHuaUserCache, cour
 	_ = a.Setting
 
 	if len(user.CoursesCustom.ExcludeCourses) != 0 && config.CmpCourse(course.Name, user.CoursesCustom.ExcludeCourses) {
-		monitor.GlobalEventBus.AddLog(a.Uid, "跳过(已排�?: "+course.Name)
+		monitor.GlobalEventBus.AddLog(a.Uid, "跳过(已排除): "+course.Name)
 		return
 	}
 	if len(user.CoursesCustom.IncludeCourses) != 0 && !config.CmpCourse(course.Name, user.CoursesCustom.IncludeCourses) {
@@ -1059,7 +1336,7 @@ func (a *YingHuaActivity) nodeListStudy(cache *yinghuaApi.YingHuaUserCache, cour
 		return
 	}
 	if time.Now().Before(course.StartDate) {
-		monitor.GlobalEventBus.AddLog(a.Uid, "跳过(未开�?: "+course.Name)
+		monitor.GlobalEventBus.AddLog(a.Uid, "跳过(未开始): "+course.Name)
 		return
 	}
 
@@ -1097,7 +1374,7 @@ func (a *YingHuaActivity) nodeListStudy(cache *yinghuaApi.YingHuaUserCache, cour
 }
 
 func (a *YingHuaActivity) videoAction(cache *yinghuaApi.YingHuaUserCache, course *yinghua.YingHuaCourse, node yinghua.YingHuaNode) {
-	monitor.GlobalEventBus.AddLog(a.Uid, fmt.Sprintf("视频(普�?: %s - %s", course.Name, node.Name))
+	monitor.GlobalEventBus.AddLog(a.Uid, fmt.Sprintf("视频(普通): %s - %s", course.Name, node.Name))
 	viewTime := node.ViewedDuration
 	studyId := "0"
 	for {
@@ -1205,7 +1482,7 @@ func (a *YingHuaActivity) videoBadRedAction(cache *yinghuaApi.YingHuaUserCache, 
 		}
 		if msg != "提交学时成功!" {
 			if strings.Contains(msg, "检测到可能使用并行播放刷课") {
-				monitor.GlobalEventBus.AddLog(a.Uid, "检测到标红，尝试去�? "+node.Name)
+				monitor.GlobalEventBus.AddLog(a.Uid, "🔴 检测到标红，尝试去红: "+node.Name)
 			}
 			time.Sleep(10 * time.Second)
 			continue
@@ -1229,7 +1506,7 @@ func (a *YingHuaActivity) workAction(cache *yinghuaApi.YingHuaUserCache, course 
 	if len(detailAction) == 0 {
 		return
 	}
-	monitor.GlobalEventBus.AddLog(a.Uid, "正在做作�? "+node.Name)
+	monitor.GlobalEventBus.AddLog(a.Uid, "📝 正在做作业: "+node.Name)
 	for _, work := range detailAction {
 		var err error
 		switch user.CoursesCustom.AutoExam {
@@ -1274,19 +1551,20 @@ func (a *EnaeaActivity) Login() error {
 	cache := &enaeaApi.EnaeaUserCache{Account: a.User.Account, Password: a.User.Password}
 	_, err := enaea.EnaeaLoginAction(cache)
 	if err != nil {
-		monitor.GlobalEventBus.SetError(a.Uid, "��¼ʧ��: "+err.Error())
+		monitor.GlobalEventBus.SetError(a.Uid, "❌ 登录失败: "+err.Error())
 		return err
 	}
 	a.UserCache = cache
-	monitor.GlobalEventBus.AddLog(a.Uid, "登录成功: "+a.User.Account)
+	monitor.GlobalEventBus.AddLog(a.Uid, "🔑 登录成功: "+a.User.Account)
 	return nil
 }
 
 func (a *EnaeaActivity) Start() error {
 	a.setStopped(false)
+	a.setPaused(false)
 	a.setRunning(true)
 	monitor.GlobalEventBus.UpdateStatus(a.Uid, monitor.StatusRunning)
-	monitor.GlobalEventBus.AddLog(a.Uid, "开始刷课任�?..")
+	monitor.GlobalEventBus.AddLog(a.Uid, "🚀 开始刷课任务...")
 	go a.run()
 	return nil
 }
@@ -1300,6 +1578,7 @@ func (a *EnaeaActivity) Stop() error {
 
 func (a *EnaeaActivity) Pause() error {
 	a.setRunning(false)
+	a.setPaused(true)
 	monitor.GlobalEventBus.UpdateStatus(a.Uid, monitor.StatusPaused)
 	return nil
 }
@@ -1311,15 +1590,18 @@ func (a *EnaeaActivity) run() {
 			monitor.GlobalEventBus.SetError(a.Uid, fmt.Sprintf("Panic: %v", r))
 			return
 		}
+		if a.isPaused() {
+			return
+		}
 		if !a.isStopped() {
 			monitor.GlobalEventBus.UpdateStatus(a.Uid, monitor.StatusCompleted)
 			a.sendCompletionEmail()
-			monitor.GlobalEventBus.UpdateProgress(a.Uid, 100, "所有课程学习完毕")
+			monitor.GlobalEventBus.UpdateProgress(a.Uid, 100, "\u6240\u6709\u8bfe\u7a0b\u5b66\u4e60\u5b8c\u6bd5")
 		}
 	}()
 	if a.UserCache == nil {
 		monitor.GlobalEventBus.UpdateStatus(a.Uid, monitor.StatusLogging)
-		monitor.GlobalEventBus.AddLog(a.Uid, "正在登录...")
+		monitor.GlobalEventBus.AddLog(a.Uid, "🔑 正在登录...")
 		if err := a.Login(); err != nil {
 			return
 		}
@@ -1363,7 +1645,7 @@ func (a *EnaeaActivity) run() {
 			return
 		}
 		if len(excludeProjects) != 0 && config.CmpCourse(project.ClusterName, excludeProjects) {
-			monitor.GlobalEventBus.AddLog(a.Uid, "跳过项目(已排�?: "+project.ClusterName)
+			monitor.GlobalEventBus.AddLog(a.Uid, "跳过项目(已排除): "+project.ClusterName)
 			continue
 		}
 		if len(includeProjects) != 0 && !config.CmpCourse(project.ClusterName, includeProjects) {
@@ -1381,7 +1663,7 @@ func (a *EnaeaActivity) run() {
 				return
 			}
 			if len(excludeTitleTags) != 0 && config.CmpCourse(course.TitleTag, excludeTitleTags) {
-				monitor.GlobalEventBus.AddLog(a.Uid, "跳过课程(已排�?: "+course.TitleTag)
+				monitor.GlobalEventBus.AddLog(a.Uid, "跳过课程(已排除): "+course.TitleTag)
 				continue
 			}
 			if len(includeTitleTags) != 0 && !config.CmpCourse(course.TitleTag, includeTitleTags) {
@@ -1440,7 +1722,7 @@ func (a *EnaeaActivity) videoAction(cache *enaeaApi.EnaeaUserCache, node *enaea.
 			}
 		}
 		enaea.LoginTimeoutAfreshAction(cache, submitErr)
-		monitor.GlobalEventBus.AddLog(a.Uid, fmt.Sprintf("视频: �?s】�?s�?进度: %.2f%%", node.CourseName, node.CourseContentStr, node.StudyProgress))
+		monitor.GlobalEventBus.AddLog(a.Uid, fmt.Sprintf("视频: 【%s】【%s】进度: %.2f%%", node.CourseName, node.CourseContentStr, node.StudyProgress))
 		time.Sleep(25 * time.Second)
 		if node.StudyProgress >= 100 {
 			break
@@ -1456,16 +1738,17 @@ func (a *CqieActivity) Login() error {
 	cache := &cqieApi.CqieUserCache{Account: a.User.Account, Password: a.User.Password}
 	err := cqie.CqieLoginAction(cache)
 	if err != nil {
-		monitor.GlobalEventBus.SetError(a.Uid, "��¼ʧ��: "+err.Error())
+		monitor.GlobalEventBus.SetError(a.Uid, "❌ 登录失败: "+err.Error())
 		return err
 	}
 	a.UserCache = cache
-	monitor.GlobalEventBus.AddLog(a.Uid, "登录成功: "+a.User.Account)
+	monitor.GlobalEventBus.AddLog(a.Uid, "🔑 登录成功: "+a.User.Account)
 	return nil
 }
 
 func (a *CqieActivity) Start() error {
 	a.setStopped(false)
+	a.setPaused(false)
 	a.setRunning(true)
 	monitor.GlobalEventBus.UpdateStatus(a.Uid, monitor.StatusRunning)
 	go a.run()
@@ -1481,6 +1764,7 @@ func (a *CqieActivity) Stop() error {
 
 func (a *CqieActivity) Pause() error {
 	a.setRunning(false)
+	a.setPaused(true)
 	monitor.GlobalEventBus.UpdateStatus(a.Uid, monitor.StatusPaused)
 	return nil
 }
@@ -1492,15 +1776,19 @@ func (a *CqieActivity) run() {
 			monitor.GlobalEventBus.SetError(a.Uid, fmt.Sprintf("Panic: %v", r))
 			return
 		}
+		if a.isPaused() {
+			return
+		}
 		if !a.isStopped() {
 			monitor.GlobalEventBus.UpdateStatus(a.Uid, monitor.StatusCompleted)
 			a.sendCompletionEmail()
-			monitor.GlobalEventBus.UpdateProgress(a.Uid, 100, "所有课程学习完毕")
+			monitor.GlobalEventBus.UpdateProgress(a.Uid, 100, "\u6240\u6709\u8bfe\u7a0b\u5b66\u4e60\u5b8c\u6bd5")
 		}
 	}()
+
 	if a.UserCache == nil {
 		monitor.GlobalEventBus.UpdateStatus(a.Uid, monitor.StatusLogging)
-		monitor.GlobalEventBus.AddLog(a.Uid, "正在登录...")
+		monitor.GlobalEventBus.AddLog(a.Uid, "🔑 正在登录...")
 		if err := a.Login(); err != nil {
 			return
 		}
@@ -1509,7 +1797,7 @@ func (a *CqieActivity) run() {
 	cache := a.UserCache.(*cqieApi.CqieUserCache)
 	courseList, err := cqie.CqiePullCourseListAction(cache)
 	if err != nil {
-		monitor.GlobalEventBus.SetError(a.Uid, "拉取课程列表失败: "+err.Error())
+		monitor.GlobalEventBus.SetError(a.Uid, "❌ 拉取课程列表失败: "+err.Error())
 		return
 	}
 	totalCourses := len(courseList)
@@ -1520,7 +1808,7 @@ func (a *CqieActivity) run() {
 			return
 		}
 		if len(user.CoursesCustom.ExcludeCourses) != 0 && config.CmpCourse(course.CourseName, user.CoursesCustom.ExcludeCourses) {
-			monitor.GlobalEventBus.AddLog(a.Uid, "跳过(已排�?: "+course.CourseName)
+			monitor.GlobalEventBus.AddLog(a.Uid, "跳过(已排除): "+course.CourseName)
 			continue
 		}
 		if len(user.CoursesCustom.IncludeCourses) != 0 && !config.CmpCourse(course.CourseName, user.CoursesCustom.IncludeCourses) {
@@ -1558,7 +1846,7 @@ func (a *CqieActivity) videoAction(cache *cqieApi.CqieUserCache, video *cqie.Cqi
 	maxPos := video.StudyTime
 	err := cqie.SaveVideoStudyTimeAction(cache, video, startPos, stopPos)
 	if err != nil {
-		monitor.GlobalEventBus.AddLog(a.Uid, "保存学习点异�? "+err.Error())
+		monitor.GlobalEventBus.AddLog(a.Uid, "保存学习点异常: "+err.Error())
 	}
 	for {
 		if !a.IsRunning() {
@@ -1584,7 +1872,7 @@ func (a *CqieActivity) videoAction(cache *cqieApi.CqieUserCache, video *cqie.Cqi
 	}
 	err = cqie.SaveVideoStudyTimeAction(cache, video, startPos, stopPos)
 	if err != nil {
-		monitor.GlobalEventBus.AddLog(a.Uid, "保存学习点异�? "+err.Error())
+		monitor.GlobalEventBus.AddLog(a.Uid, "保存学习点异常: "+err.Error())
 	}
 	monitor.GlobalEventBus.AddLog(a.Uid, "视频完成: "+video.VideoName)
 }
@@ -1597,7 +1885,7 @@ func (a *CqieActivity) videoSpeedAction(cache *cqieApi.CqieUserCache, video *cqi
 	maxPos := video.StudyTime
 	err := cqie.SaveVideoStudyTimeAction(cache, video, startPos, stopPos)
 	if err != nil {
-		monitor.GlobalEventBus.AddLog(a.Uid, "保存学习点异�? "+err.Error())
+		monitor.GlobalEventBus.AddLog(a.Uid, "保存学习点异常: "+err.Error())
 	}
 	err1 := cqie.SubmitStudyTimeAction(cache, video, time.Now(), startPos, stopPos, maxPos)
 	if err1 != nil {
@@ -1605,7 +1893,7 @@ func (a *CqieActivity) videoSpeedAction(cache *cqieApi.CqieUserCache, video *cqi
 	}
 	err = cqie.SaveVideoStudyTimeAction(cache, video, startPos, stopPos)
 	if err != nil {
-		monitor.GlobalEventBus.AddLog(a.Uid, "保存学习点异�? "+err.Error())
+		monitor.GlobalEventBus.AddLog(a.Uid, "保存学习点异常: "+err.Error())
 	}
 	monitor.GlobalEventBus.AddLog(a.Uid, "视频完成(秒刷): "+video.VideoName)
 }
@@ -1618,16 +1906,17 @@ func (a *IcveActivity) Login() error {
 	cache := &icveApi.IcveUserCache{Account: a.User.Account, Password: a.User.Password}
 	err := icve.IcveLoginAction(cache)
 	if err != nil {
-		monitor.GlobalEventBus.SetError(a.Uid, "��¼ʧ��: "+err.Error())
+		monitor.GlobalEventBus.SetError(a.Uid, "❌ 登录失败: "+err.Error())
 		return err
 	}
 	a.UserCache = cache
-	monitor.GlobalEventBus.AddLog(a.Uid, "登录成功: "+a.User.Account)
+	monitor.GlobalEventBus.AddLog(a.Uid, "🔑 登录成功: "+a.User.Account)
 	return nil
 }
 
 func (a *IcveActivity) Start() error {
 	a.setStopped(false)
+	a.setPaused(false)
 	a.setRunning(true)
 	monitor.GlobalEventBus.UpdateStatus(a.Uid, monitor.StatusRunning)
 	go a.run()
@@ -1643,6 +1932,7 @@ func (a *IcveActivity) Stop() error {
 
 func (a *IcveActivity) Pause() error {
 	a.setRunning(false)
+	a.setPaused(true)
 	monitor.GlobalEventBus.UpdateStatus(a.Uid, monitor.StatusPaused)
 	return nil
 }
@@ -1654,15 +1944,15 @@ func (a *IcveActivity) run() {
 			monitor.GlobalEventBus.SetError(a.Uid, fmt.Sprintf("Panic: %v", r))
 			return
 		}
-		if !a.isStopped() {
+		if !a.isStopped() && !a.isPaused() {
 			monitor.GlobalEventBus.UpdateStatus(a.Uid, monitor.StatusCompleted)
 			a.sendCompletionEmail()
-			monitor.GlobalEventBus.UpdateProgress(a.Uid, 100, "所有课程学习完毕")
+			monitor.GlobalEventBus.UpdateProgress(a.Uid, 100, "\u6240\u6709\u8bfe\u7a0b\u5b66\u4e60\u5b8c\u6bd5")
 		}
 	}()
 	if a.UserCache == nil {
 		monitor.GlobalEventBus.UpdateStatus(a.Uid, monitor.StatusLogging)
-		monitor.GlobalEventBus.AddLog(a.Uid, "正在登录...")
+		monitor.GlobalEventBus.AddLog(a.Uid, "🔑 正在登录...")
 		if err := a.Login(); err != nil {
 			return
 		}
@@ -1671,7 +1961,7 @@ func (a *IcveActivity) run() {
 	cache := a.UserCache.(*icveApi.IcveUserCache)
 	courseList, err := icve.PullZYKCourseAction(cache)
 	if err != nil {
-		monitor.GlobalEventBus.SetError(a.Uid, "拉取课程列表失败: "+err.Error())
+		monitor.GlobalEventBus.SetError(a.Uid, "❌ 拉取课程列表失败: "+err.Error())
 		return
 	}
 	totalCourses := len(courseList)
@@ -1682,7 +1972,7 @@ func (a *IcveActivity) run() {
 			return
 		}
 		if len(user.CoursesCustom.ExcludeCourses) != 0 && config.CmpCourse(course.CourseName, user.CoursesCustom.ExcludeCourses) {
-			monitor.GlobalEventBus.AddLog(a.Uid, "跳过(已排�?: "+course.CourseName)
+			monitor.GlobalEventBus.AddLog(a.Uid, "跳过(已排除): "+course.CourseName)
 			continue
 		}
 		if len(user.CoursesCustom.IncludeCourses) != 0 && !config.CmpCourse(course.CourseName, user.CoursesCustom.IncludeCourses) {
@@ -1690,7 +1980,7 @@ func (a *IcveActivity) run() {
 			continue
 		}
 		if course.Status == "3" {
-			monitor.GlobalEventBus.AddLog(a.Uid, "跳过(已结�?: "+course.CourseName)
+			monitor.GlobalEventBus.AddLog(a.Uid, "跳过(已结束): "+course.CourseName)
 			continue
 		}
 		monitor.GlobalEventBus.UpdateProgress(a.Uid, float64(i)/float64(totalCourses)*100, "正在学习: "+course.CourseName)
@@ -1726,16 +2016,17 @@ func (a *QsxtActivity) Login() error {
 	cache := &qsxtApi.QsxtUserCache{Account: a.User.Account, Password: a.User.Password}
 	_, err := qingshuxuetang.QsxtLoginAction(cache)
 	if err != nil {
-		monitor.GlobalEventBus.SetError(a.Uid, "��¼ʧ��: "+err.Error())
+		monitor.GlobalEventBus.SetError(a.Uid, "❌ 登录失败: "+err.Error())
 		return err
 	}
 	a.UserCache = cache
-	monitor.GlobalEventBus.AddLog(a.Uid, "登录成功: "+a.User.Account)
+	monitor.GlobalEventBus.AddLog(a.Uid, "🔑 登录成功: "+a.User.Account)
 	return nil
 }
 
 func (a *QsxtActivity) Start() error {
 	a.setStopped(false)
+	a.setPaused(false)
 	a.setRunning(true)
 	monitor.GlobalEventBus.UpdateStatus(a.Uid, monitor.StatusRunning)
 	go a.run()
@@ -1751,6 +2042,7 @@ func (a *QsxtActivity) Stop() error {
 
 func (a *QsxtActivity) Pause() error {
 	a.setRunning(false)
+	a.setPaused(true)
 	monitor.GlobalEventBus.UpdateStatus(a.Uid, monitor.StatusPaused)
 	return nil
 }
@@ -1762,15 +2054,15 @@ func (a *QsxtActivity) run() {
 			monitor.GlobalEventBus.SetError(a.Uid, fmt.Sprintf("Panic: %v", r))
 			return
 		}
-		if !a.isStopped() {
+		if !a.isStopped() && !a.isPaused() {
 			monitor.GlobalEventBus.UpdateStatus(a.Uid, monitor.StatusCompleted)
 			a.sendCompletionEmail()
-			monitor.GlobalEventBus.UpdateProgress(a.Uid, 100, "所有课程学习完毕")
+			monitor.GlobalEventBus.UpdateProgress(a.Uid, 100, "\u6240\u6709\u8bfe\u7a0b\u5b66\u4e60\u5b8c\u6bd5")
 		}
 	}()
 	if a.UserCache == nil {
 		monitor.GlobalEventBus.UpdateStatus(a.Uid, monitor.StatusLogging)
-		monitor.GlobalEventBus.AddLog(a.Uid, "正在登录...")
+		monitor.GlobalEventBus.AddLog(a.Uid, "🔑 正在登录...")
 		if err := a.Login(); err != nil {
 			return
 		}
@@ -1779,7 +2071,7 @@ func (a *QsxtActivity) run() {
 	cache := a.UserCache.(*qsxtApi.QsxtUserCache)
 	courseList, err := qingshuxuetang.PullCourseListAction(cache)
 	if err != nil {
-		monitor.GlobalEventBus.SetError(a.Uid, "拉取课程列表失败: "+err.Error())
+		monitor.GlobalEventBus.SetError(a.Uid, "❌ 拉取课程列表失败: "+err.Error())
 		return
 	}
 	totalCourses := len(courseList)
@@ -1790,7 +2082,7 @@ func (a *QsxtActivity) run() {
 			return
 		}
 		if len(user.CoursesCustom.ExcludeCourses) != 0 && config.CmpCourse(course.CourseName, user.CoursesCustom.ExcludeCourses) {
-			monitor.GlobalEventBus.AddLog(a.Uid, "跳过(已排�?: "+course.CourseName)
+			monitor.GlobalEventBus.AddLog(a.Uid, "跳过(已排除): "+course.CourseName)
 			continue
 		}
 		if len(user.CoursesCustom.IncludeCourses) != 0 && !config.CmpCourse(course.CourseName, user.CoursesCustom.IncludeCourses) {
@@ -1798,7 +2090,7 @@ func (a *QsxtActivity) run() {
 			continue
 		}
 		if course.StudyStatusName != "在修" {
-			monitor.GlobalEventBus.AddLog(a.Uid, "跳过(非在�?: "+course.CourseName)
+			monitor.GlobalEventBus.AddLog(a.Uid, "跳过(非在修): "+course.CourseName)
 			continue
 		}
 		monitor.GlobalEventBus.UpdateProgress(a.Uid, float64(i)/float64(totalCourses)*100, "正在学习: "+course.CourseName)
@@ -1869,7 +2161,7 @@ func (a *QsxtActivity) nodeSubmitTimeAction(cache *qsxtApi.QsxtUserCache, course
 	}
 	startId, err2 := node.StartStudyTimeAction(cache)
 	if err2 != nil {
-		monitor.GlobalEventBus.AddLog(a.Uid, "开始学习异�? "+node.NodeName+" - "+err2.Error())
+		monitor.GlobalEventBus.AddLog(a.Uid, "开始学习异常: "+node.NodeName+" - "+err2.Error())
 		return
 	}
 	studyTime := 0
@@ -1903,10 +2195,10 @@ func (a *QsxtActivity) materialSubmitTimeAction(cache *qsxtApi.QsxtUserCache, co
 }
 
 func (a *QsxtActivity) workAction(cache *qsxtApi.QsxtUserCache, course *qingshuxuetang.QsxtCourse, work *qingshuxuetang.QsxtWork) {
-	monitor.GlobalEventBus.AddLog(a.Uid, "正在做作业: "+work.Title)
+	monitor.GlobalEventBus.AddLog(a.Uid, "📝 正在做作业: "+work.Title)
 	isSubmit := a.User.CoursesCustom.ExamAutoSubmit == 1
 	qingshuxuetang.WriteWorkAction(cache, *work, isSubmit)
-	monitor.GlobalEventBus.AddLog(a.Uid, "作业完成: "+work.Title)
+	monitor.GlobalEventBus.AddLog(a.Uid, "✅ 作业完成: "+work.Title)
 }
 
 // ==================== WELEARN ====================
@@ -1917,16 +2209,17 @@ func (a *WeLearnActivity) Login() error {
 	cache := &welearnApi.WeLearnUserCache{Account: a.User.Account, Password: a.User.Password}
 	err := welearn.WeLearnLoginAction(cache)
 	if err != nil {
-		monitor.GlobalEventBus.SetError(a.Uid, "��¼ʧ��: "+err.Error())
+		monitor.GlobalEventBus.SetError(a.Uid, "❌ 登录失败: "+err.Error())
 		return err
 	}
 	a.UserCache = cache
-	monitor.GlobalEventBus.AddLog(a.Uid, "登录成功: "+a.User.Account)
+	monitor.GlobalEventBus.AddLog(a.Uid, "🔑 登录成功: "+a.User.Account)
 	return nil
 }
 
 func (a *WeLearnActivity) Start() error {
 	a.setStopped(false)
+	a.setPaused(false)
 	a.setRunning(true)
 	monitor.GlobalEventBus.UpdateStatus(a.Uid, monitor.StatusRunning)
 	go a.run()
@@ -1942,6 +2235,7 @@ func (a *WeLearnActivity) Stop() error {
 
 func (a *WeLearnActivity) Pause() error {
 	a.setRunning(false)
+	a.setPaused(true)
 	monitor.GlobalEventBus.UpdateStatus(a.Uid, monitor.StatusPaused)
 	return nil
 }
@@ -1953,15 +2247,15 @@ func (a *WeLearnActivity) run() {
 			monitor.GlobalEventBus.SetError(a.Uid, fmt.Sprintf("Panic: %v", r))
 			return
 		}
-		if !a.isStopped() {
+		if !a.isStopped() && !a.isPaused() {
 			monitor.GlobalEventBus.UpdateStatus(a.Uid, monitor.StatusCompleted)
 			a.sendCompletionEmail()
-			monitor.GlobalEventBus.UpdateProgress(a.Uid, 100, "所有课程学习完毕")
+			monitor.GlobalEventBus.UpdateProgress(a.Uid, 100, "\u6240\u6709\u8bfe\u7a0b\u5b66\u4e60\u5b8c\u6bd5")
 		}
 	}()
 	if a.UserCache == nil {
 		monitor.GlobalEventBus.UpdateStatus(a.Uid, monitor.StatusLogging)
-		monitor.GlobalEventBus.AddLog(a.Uid, "正在登录...")
+		monitor.GlobalEventBus.AddLog(a.Uid, "🔑 正在登录...")
 		if err := a.Login(); err != nil {
 			return
 		}
@@ -1970,7 +2264,7 @@ func (a *WeLearnActivity) run() {
 	cache := a.UserCache.(*welearnApi.WeLearnUserCache)
 	courseList, err := welearn.WeLearnPullCourseListAction(cache)
 	if err != nil {
-		monitor.GlobalEventBus.SetError(a.Uid, "拉取课程列表失败: "+err.Error())
+		monitor.GlobalEventBus.SetError(a.Uid, "❌ 拉取课程列表失败: "+err.Error())
 		return
 	}
 	totalCourses := len(courseList)
@@ -1981,7 +2275,7 @@ func (a *WeLearnActivity) run() {
 			return
 		}
 		if len(user.CoursesCustom.ExcludeCourses) != 0 && config.CmpCourse(course.Name, user.CoursesCustom.ExcludeCourses) {
-			monitor.GlobalEventBus.AddLog(a.Uid, "跳过(已排�?: "+course.Name)
+			monitor.GlobalEventBus.AddLog(a.Uid, "跳过(已排除): "+course.Name)
 			continue
 		}
 		if len(user.CoursesCustom.IncludeCourses) != 0 && !config.CmpCourse(course.Name, user.CoursesCustom.IncludeCourses) {
@@ -2067,7 +2361,7 @@ func (a *WeLearnActivity) nodeSubmitTimeAction(cache *welearnApi.WeLearnUserCach
 		time.Sleep(60 * time.Second)
 	}
 	cache.SubmitStudyPlan2Api(course.Cid, node.Id, course.Uid, scaled, course.ClassId, progressMeasure, "completed", 3, nil)
-	monitor.GlobalEventBus.AddLog(a.Uid, "任务点完�? "+node.Location)
+	monitor.GlobalEventBus.AddLog(a.Uid, "✅ 任务点完成: "+node.Location)
 }
 
 func (a *WeLearnActivity) nodeCompleteAction(cache *welearnApi.WeLearnUserCache, course welearn.WeLearnCourse, node welearn.WeLearnPoint) {
@@ -2087,7 +2381,7 @@ func (a *WeLearnActivity) nodeCompleteAction(cache *welearnApi.WeLearnUserCache,
 		monitor.GlobalEventBus.AddLog(a.Uid, "学习异常: "+node.Location+" - "+err.Error())
 		return
 	}
-	monitor.GlobalEventBus.AddLog(a.Uid, "任务点完�? "+node.Location)
+	monitor.GlobalEventBus.AddLog(a.Uid, "✅ 任务点完成: "+node.Location)
 }
 
 // ==================== KETANGX ====================
@@ -2098,16 +2392,17 @@ func (a *KetangxActivity) Login() error {
 	cache := &ketangxApi.KetangxUserCache{Account: a.User.Account, Password: a.User.Password}
 	err := ketangx.LoginAction(cache)
 	if err != nil {
-		monitor.GlobalEventBus.SetError(a.Uid, "��¼ʧ��: "+err.Error())
+		monitor.GlobalEventBus.SetError(a.Uid, "❌ 登录失败: "+err.Error())
 		return err
 	}
 	a.UserCache = cache
-	monitor.GlobalEventBus.AddLog(a.Uid, "登录成功: "+a.User.Account)
+	monitor.GlobalEventBus.AddLog(a.Uid, "🔑 登录成功: "+a.User.Account)
 	return nil
 }
 
 func (a *KetangxActivity) Start() error {
 	a.setStopped(false)
+	a.setPaused(false)
 	a.setRunning(true)
 	monitor.GlobalEventBus.UpdateStatus(a.Uid, monitor.StatusRunning)
 	go a.run()
@@ -2123,6 +2418,7 @@ func (a *KetangxActivity) Stop() error {
 
 func (a *KetangxActivity) Pause() error {
 	a.setRunning(false)
+	a.setPaused(true)
 	monitor.GlobalEventBus.UpdateStatus(a.Uid, monitor.StatusPaused)
 	return nil
 }
@@ -2134,15 +2430,15 @@ func (a *KetangxActivity) run() {
 			monitor.GlobalEventBus.SetError(a.Uid, fmt.Sprintf("Panic: %v", r))
 			return
 		}
-		if !a.isStopped() {
+		if !a.isStopped() && !a.isPaused() {
 			monitor.GlobalEventBus.UpdateStatus(a.Uid, monitor.StatusCompleted)
 			a.sendCompletionEmail()
-			monitor.GlobalEventBus.UpdateProgress(a.Uid, 100, "所有课程学习完毕")
+			monitor.GlobalEventBus.UpdateProgress(a.Uid, 100, "\u6240\u6709\u8bfe\u7a0b\u5b66\u4e60\u5b8c\u6bd5")
 		}
 	}()
 	if a.UserCache == nil {
 		monitor.GlobalEventBus.UpdateStatus(a.Uid, monitor.StatusLogging)
-		monitor.GlobalEventBus.AddLog(a.Uid, "正在登录...")
+		monitor.GlobalEventBus.AddLog(a.Uid, "🔑 正在登录...")
 		if err := a.Login(); err != nil {
 			return
 		}
@@ -2158,7 +2454,7 @@ func (a *KetangxActivity) run() {
 			return
 		}
 		if len(user.CoursesCustom.ExcludeCourses) != 0 && config.CmpCourse(course.Title, user.CoursesCustom.ExcludeCourses) {
-			monitor.GlobalEventBus.AddLog(a.Uid, "跳过(已排�?: "+course.Title)
+			monitor.GlobalEventBus.AddLog(a.Uid, "跳过(已排除): "+course.Title)
 			continue
 		}
 		if len(user.CoursesCustom.IncludeCourses) != 0 && !config.CmpCourse(course.Title, user.CoursesCustom.IncludeCourses) {
@@ -2200,16 +2496,17 @@ func (a *HqkjActivity) Login() error {
 	cache := &hqkjApi.HqkjUserCache{PreUrl: a.User.URL, Account: a.User.Account, Password: a.User.Password}
 	err := haiqikeji.HqkjLoginAction(cache)
 	if err != nil {
-		monitor.GlobalEventBus.SetError(a.Uid, "��¼ʧ��: "+err.Error())
+		monitor.GlobalEventBus.SetError(a.Uid, "❌ 登录失败: "+err.Error())
 		return err
 	}
 	a.UserCache = cache
-	monitor.GlobalEventBus.AddLog(a.Uid, "登录成功: "+a.User.Account)
+	monitor.GlobalEventBus.AddLog(a.Uid, "🔑 登录成功: "+a.User.Account)
 	return nil
 }
 
 func (a *HqkjActivity) Start() error {
 	a.setStopped(false)
+	a.setPaused(false)
 	a.setRunning(true)
 	monitor.GlobalEventBus.UpdateStatus(a.Uid, monitor.StatusRunning)
 	go a.run()
@@ -2225,6 +2522,7 @@ func (a *HqkjActivity) Stop() error {
 
 func (a *HqkjActivity) Pause() error {
 	a.setRunning(false)
+	a.setPaused(true)
 	monitor.GlobalEventBus.UpdateStatus(a.Uid, monitor.StatusPaused)
 	return nil
 }
@@ -2236,15 +2534,15 @@ func (a *HqkjActivity) run() {
 			monitor.GlobalEventBus.SetError(a.Uid, fmt.Sprintf("Panic: %v", r))
 			return
 		}
-		if !a.isStopped() {
+		if !a.isStopped() && !a.isPaused() {
 			monitor.GlobalEventBus.UpdateStatus(a.Uid, monitor.StatusCompleted)
 			a.sendCompletionEmail()
-			monitor.GlobalEventBus.UpdateProgress(a.Uid, 100, "所有课程学习完毕")
+			monitor.GlobalEventBus.UpdateProgress(a.Uid, 100, "\u6240\u6709\u8bfe\u7a0b\u5b66\u4e60\u5b8c\u6bd5")
 		}
 	}()
 	if a.UserCache == nil {
 		monitor.GlobalEventBus.UpdateStatus(a.Uid, monitor.StatusLogging)
-		monitor.GlobalEventBus.AddLog(a.Uid, "正在登录...")
+		monitor.GlobalEventBus.AddLog(a.Uid, "🔑 正在登录...")
 		if err := a.Login(); err != nil {
 			return
 		}
@@ -2253,7 +2551,7 @@ func (a *HqkjActivity) run() {
 	cache := a.UserCache.(*hqkjApi.HqkjUserCache)
 	courseList, err := haiqikeji.HqkjCourseListAction(cache)
 	if err != nil {
-		monitor.GlobalEventBus.SetError(a.Uid, "拉取课程列表失败: "+err.Error())
+		monitor.GlobalEventBus.SetError(a.Uid, "❌ 拉取课程列表失败: "+err.Error())
 		return
 	}
 	totalCourses := len(courseList)
@@ -2264,7 +2562,7 @@ func (a *HqkjActivity) run() {
 			return
 		}
 		if len(user.CoursesCustom.ExcludeCourses) != 0 && config.CmpCourse(course.Name, user.CoursesCustom.ExcludeCourses) {
-			monitor.GlobalEventBus.AddLog(a.Uid, "跳过(已排�?: "+course.Name)
+			monitor.GlobalEventBus.AddLog(a.Uid, "跳过(已排除): "+course.Name)
 			continue
 		}
 		if len(user.CoursesCustom.IncludeCourses) != 0 && !config.CmpCourse(course.Name, user.CoursesCustom.IncludeCourses) {
@@ -2272,7 +2570,7 @@ func (a *HqkjActivity) run() {
 			continue
 		}
 		if course.StartDate.After(time.Now()) || course.EndDate.Before(time.Now()) {
-			monitor.GlobalEventBus.AddLog(a.Uid, fmt.Sprintf("跳过(不在开课时�?: %s [%s ~ %s]", course.Name, course.StartDate.Format("2006-01-02"), course.EndDate.Format("2006-01-02")))
+			monitor.GlobalEventBus.AddLog(a.Uid, fmt.Sprintf("跳过(不在开课时期): %s [%s ~ %s]", course.Name, course.StartDate.Format("2006-01-02"), course.EndDate.Format("2006-01-02")))
 			continue
 		}
 		monitor.GlobalEventBus.UpdateProgress(a.Uid, float64(i)/float64(totalCourses)*100, "正在学习: "+course.Name)
@@ -2335,7 +2633,7 @@ func (a *HqkjActivity) normalModeAction(cache *hqkjApi.HqkjUserCache, course *ha
 			} else {
 				msg := gojsonq.New().JSONString(submitResult).Find("msg")
 				if msg != nil {
-					monitor.GlobalEventBus.AddLog(a.Uid, fmt.Sprintf("视频: %s 进度: %d%% 状�? %s", node.Name, submitProgress, msg.(string)))
+					monitor.GlobalEventBus.AddLog(a.Uid, fmt.Sprintf("视频: %s 进度: %d%% 状态: %s", node.Name, submitProgress, msg.(string)))
 				}
 			}
 			if submitProgress >= 100 {

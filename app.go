@@ -28,7 +28,7 @@ type App struct {
 	shouldQuit bool
 }
 
-const AppVersion = "1.0.2"
+const AppVersion = "1.1.3"
 
 func NewApp() *App {
 	return &App{notified: make(map[string]time.Time)}

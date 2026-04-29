@@ -59,7 +59,7 @@ const SettingsPage: React.FC = () => {
           apiQueSetting: { url: apiQueUrl },
           emailInform: { sw: emailSw, smtpHost, smtpPort, userName: emailUser, password: emailPass },
         },
-        users: [],
+        users: config?.users || [],
       }
       await saveConfig(cfg)
     } catch (e) { console.error('保存配置失败:', e) }

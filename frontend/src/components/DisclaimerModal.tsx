@@ -59,7 +59,67 @@ const DisclaimerModal: React.FC<DisclaimerModalProps> = ({ onAccept, readOnly, o
           </div>
 
           <div className="border-t border-dark-700 pt-4">
-            <h3 className="text-green-400 font-bold text-base mb-3">📋 v1.0.5 更新内容</h3>
+            <h3 className="text-red-400 font-bold text-base mb-3">🔥 v1.1.3 严重Bug修复</h3>
+            <ul className="list-disc list-inside space-y-1.5 text-dark-300">
+              <li>【关键修复】多任务点模式和正常刷课模式无法使用：移除nodeRun中的调试代码块，恢复正确视频处理逻辑</li>
+              <li>【修复】日志中大量乱码中文字符：修复约50处乱码字符，提升用户体验</li>
+              <li>【修复】暂停后状态标记错误：为所有Activity添加isPaused()检查，确保暂停状态正确</li>
+            </ul>
+          </div>
+
+          <div className="border-t border-dark-700 pt-4">
+            <h3 className="text-red-400 font-bold text-base mb-3">🔥 v1.1.2 全面对齐原项目</h3>
+            <ul className="list-disc list-inside space-y-1.5 text-dark-300">
+              <li>【关键修复】课程级并发逻辑：VideoModel==1时串行，VideoModel!=1时并发，与原项目完全对齐</li>
+              <li>【关键修复】节点级并发队列机制：VideoModel==3时使用队列管理并发资源，与原项目一致</li>
+              <li>【关键修复】视频被错误跳过为"非任务点"问题：Go语言range循环变量副本问题已修复</li>
+              <li>【关键修复】model3Caches初始化逻辑：先添加到数组再重新登录，与原项目一致</li>
+              <li>【修复】所有任务点类型（视频/音频/文档/作业/外链/直播/讨论）的指针问题全部修复</li>
+              <li>【修复】作业/考试状态值语言错误：使用中文状态值（待做/未交/待重做/待重考）</li>
+              <li>【修复】章节测试缺失题型：名词解释、论述题、连线题</li>
+              <li>【修复】ExamAutoSubmit==2模式空答案检测</li>
+              <li>【修复】考试限时提交处理</li>
+              <li>【修复】暂停后状态标记错误</li>
+            </ul>
+          </div>
+
+          <div className="border-t border-dark-700 pt-4">
+            <h3 className="text-orange-400 font-bold text-base mb-3">📋 v1.1.1 核心修复</h3>
+            <ul className="list-disc list-inside space-y-1.5 text-dark-300">
+              <li>【关键修复】视频被错误跳过为"非任务点"问题：Go语言range循环变量是副本，AttachmentsDetection修改副本而非原数组，导致IsJob始终为false，现已修复</li>
+              <li>【关键修复】model3Caches初始化逻辑错误：原项目先添加到数组再重新登录，新项目错误地修改临时变量，现已修复</li>
+              <li>【修复】所有任务点类型（视频/音频/文档/作业/外链/直播/讨论）的指针问题全部修复</li>
+            </ul>
+          </div>
+
+          <div className="border-t border-dark-700 pt-4">
+            <h3 className="text-orange-400 font-bold text-base mb-3">📋 v1.1.0 紧急修复</h3>
+            <ul className="list-disc list-inside space-y-1.5 text-dark-300">
+              <li>【紧急修复】作业/考试状态值语言错误：原项目使用中文状态值（待做/未交/待重做/待重考），新项目错误使用英文导致作业考试无法识别，现已修复</li>
+              <li>【重要修复】章节测试新增缺失题型支持：名词解释、论述题、连线题三种题型自动答题</li>
+              <li>【重要修复】ExamAutoSubmit==2模式空答案检测：有空答案时不自动提交，避免0分</li>
+              <li>【新增】考试限时提交处理：自动检测限制并延时重新提交</li>
+              <li>【修复】暂停后状态标记错误：暂停后不再误显示为"已完成"</li>
+              <li>【修复】日志中多处乱码中文字符修复</li>
+            </ul>
+          </div>
+
+          <div className="border-t border-dark-700 pt-4">
+            <h3 className="text-green-400 font-bold text-base mb-3">📋 v1.0.9 更新内容</h3>
+            <ul className="list-disc list-inside space-y-1.5 text-dark-300">
+              <li>【重要修复】多任务点模式(VModel2/3)课程并发处理：对齐原项目逻辑，VideoModel!=1时课程级并发执行，大幅提升刷课效率</li>
+              <li>【重要修复】章节测试新增缺失题型支持：名词解释(TermExplanation)、论述题(Essay)、连线题(Matching)三种题型自动答题</li>
+              <li>【重要修复】ExamAutoSubmit==2模式空答案检测：答题后自动检测是否存在空答案，有空答案时不自动提交，避免0分</li>
+              <li>【新增】考试限时提交处理：自动检测"考试N分钟内不允许提交"限制，延时后自动重新提交</li>
+              <li>【新增】考试时间已用完检测：增加"考试时间已用完"中文检测，避免超时提交报错</li>
+              <li>【修复】暂停(Pause)后状态标记错误：暂停后不再误显示为"已完成"，正确保持"已暂停"状态</li>
+              <li>【修复】所有Activity类型的Start/Pause方法增加isPaused状态管理</li>
+              <li>【修复】日志中多处乱码中文字符修复</li>
+            </ul>
+          </div>
+
+          <div className="border-t border-dark-700 pt-4">
+            <h3 className="text-blue-400 font-bold text-base mb-3">📋 v1.0.5 更新内容</h3>
             <ul className="list-disc list-inside space-y-1.5 text-dark-300">
               <li>新增识图模型配置：支持配置视觉AI模型，自动识别题目中的图片进行答题</li>
               <li>新增双模型配置界面：纯文本模型（必填）+ 识图模型（选填），含图片题目自动使用识图模型</li>

@@ -1,7 +1,7 @@
-import React, { useEffect, useState, useMemo } from 'react'
+import React, { useEffect, useState, useMemo, useRef, useCallback } from 'react'
 import { useAppStore } from '../stores/useAppStore'
 import { cn, getPlatformName, getPlatformIcon, getStatusColor, getStatusLabel, getProgressColor } from '../utils/helpers'
-import { Activity, RefreshCw, ChevronDown, ChevronUp, Terminal } from 'lucide-react'
+import { Activity, RefreshCw, ChevronDown, ChevronUp, Terminal, ArrowDown } from 'lucide-react'
 import { AnimatePresence } from 'framer-motion'
 
 const MonitorCard: React.FC<{
@@ -18,6 +18,65 @@ const MonitorCard: React.FC<{
   errorMessage?: string
 }> = ({ uid, accountName, platform, platformName, status, progress, currentTask, totalCourses, doneCourses, logs, errorMessage }) => {
   const [showLogs, setShowLogs] = useState(false)
+  const [autoScroll, setAutoScroll] = useState(true)
+  const logContainerRef = useRef<HTMLDivElement>(null)
+  const prevLogCountRef = useRef(0)
+
+  useEffect(() => {
+    if (showLogs && autoScroll && logContainerRef.current) {
+      const el = logContainerRef.current
+      const isNearBottom = el.scrollHeight - el.scrollTop - el.clientHeight < 80
+      if (isNearBottom || logs.length !== prevLogCountRef.current) {
+        requestAnimationFrame(() => {
+          el.scrollTop = el.scrollHeight
+        })
+      }
+    }
+    prevLogCountRef.current = logs.length
+  }, [logs, showLogs, autoScroll])
+
+  const handleScroll = useCallback(() => {
+    if (!logContainerRef.current) return
+    const el = logContainerRef.current
+    const isNearBottom = el.scrollHeight - el.scrollTop - el.clientHeight < 80
+    if (!isNearBottom && autoScroll) {
+      setAutoScroll(false)
+    }
+  }, [autoScroll])
+
+  const scrollToBottom = useCallback(() => {
+    if (logContainerRef.current) {
+      logContainerRef.current.scrollTop = logContainerRef.current.scrollHeight
+      setAutoScroll(true)
+    }
+  }, [])
+
+  const getLogIcon = (log: string) => {
+    if (log.includes('完成') || log.includes('成功') || log.includes('完毕')) return '✅'
+    if (log.includes('失败') || log.includes('错误') || log.includes('异常') || log.includes('跳过')) return '⚠️'
+    if (log.includes('开始') || log.includes('正在') || log.includes('获取到')) return '▶️'
+    if (log.includes('视频') || log.includes('音频')) return '🎬'
+    if (log.includes('作业') || log.includes('考试') || log.includes('测试')) return '📝'
+    if (log.includes('登录')) return '🔑'
+    if (log.includes('课程') || log.includes('章节')) return '📚'
+    if (log.includes('文档')) return '📄'
+    if (log.includes('直播')) return '📡'
+    if (log.includes('讨论')) return '💬'
+    return '•'
+  }
+
+  const getLogColor = (log: string) => {
+    if (log.includes('完成') || log.includes('成功') || log.includes('完毕')) return 'text-emerald-400'
+    if (log.includes('失败') || log.includes('错误') || log.includes('异常')) return 'text-red-400'
+    if (log.includes('跳过')) return 'text-yellow-400'
+    if (log.includes('开始') || log.includes('正在')) return 'text-blue-400'
+    if (log.includes('警告') || log.includes('注意')) return 'text-orange-400'
+    return 'text-dark-400'
+  }
+
+  const formatLogTime = (index: number) => {
+    return String(index + 1).padStart(3, '0')
+  }
 
   return (
     <div className="glass-card overflow-hidden">
@@ -64,8 +123,9 @@ const MonitorCard: React.FC<{
             )}
           </div>
 
-          <button onClick={() => setShowLogs(!showLogs)} className="btn-secondary text-xs px-2 py-1.5">
-            {showLogs ? <ChevronUp size={14} /> : <ChevronDown size={14} />}
+          <button onClick={() => setShowLogs(!showLogs)} className={cn("btn-secondary text-xs px-2 py-1.5 flex items-center gap-1", showLogs && "bg-accent-600/20 text-accent-400 border-accent-600/30")}>
+            <Terminal size={14} />
+            {logs?.length > 0 && <span className="ml-0.5">{logs.length}</span>}
           </button>
         </div>
       </div>
@@ -73,22 +133,49 @@ const MonitorCard: React.FC<{
       <AnimatePresence>
         {showLogs && (
           <div className="border-t border-dark-800/50">
-            <div className="p-3 bg-dark-950/50 max-h-48 overflow-y-auto">
-              <div className="flex items-center gap-2 mb-2">
-                <Terminal size={12} className="text-dark-500" />
-                <span className="text-xs text-dark-500 font-medium">运行日志</span>
-              </div>
-              <div className="space-y-0.5 font-mono text-xs">
-                {(!logs || logs.length === 0) ? (
-                  <p className="text-dark-600">暂无日志</p>
-                ) : (
-                  logs.map((log, i) => (
-                    <p key={i} className="text-dark-400 leading-relaxed">
-                      <span className="text-dark-600 mr-2">[{String(i + 1).padStart(3, '0')}]</span>
-                      {log}
-                    </p>
-                  ))
-                )}
+            <div className="relative">
+              <div
+                ref={logContainerRef}
+                onScroll={handleScroll}
+                className="p-3 bg-dark-950/50 max-h-64 overflow-y-auto scroll-smooth"
+              >
+                <div className="flex items-center justify-between mb-2">
+                  <div className="flex items-center gap-2">
+                    <Terminal size={12} className="text-dark-500" />
+                    <span className="text-xs text-dark-500 font-medium">运行日志 ({logs?.length || 0})</span>
+                  </div>
+                  <div className="flex items-center gap-2">
+                    <button
+                      onClick={scrollToBottom}
+                      className={cn(
+                        "text-xs px-1.5 py-0.5 rounded transition-colors",
+                        autoScroll ? "text-accent-400 bg-accent-600/10" : "text-dark-500 hover:text-dark-300"
+                      )}
+                      title="滚动到底部"
+                    >
+                      <ArrowDown size={12} />
+                    </button>
+                    <span className={cn(
+                      "text-[10px] px-1.5 py-0.5 rounded",
+                      autoScroll ? "text-accent-400 bg-accent-600/10" : "text-dark-600 bg-dark-800"
+                    )}>
+                      {autoScroll ? '自动滚动' : '手动滚动'}
+                    </span>
+                  </div>
+                </div>
+                <div className="space-y-0.5 font-mono text-xs">
+                  {(!logs || logs.length === 0) ? (
+                    <p className="text-dark-600">暂无日志</p>
+                  ) : (
+                    logs.map((log, i) => (
+                      <p key={i} className={cn("leading-relaxed", getLogColor(log))}>
+                        <span className="text-dark-600 mr-1.5">[{formatLogTime(i)}]</span>
+                        <span className="mr-1">{getLogIcon(log)}</span>
+                        {log}
+                      </p>
+                    ))
+                  )}
+                </div>
               </div>
             </div>
           </div>

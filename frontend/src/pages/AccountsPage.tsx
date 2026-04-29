@@ -1,7 +1,7 @@
 import React, { useState, useEffect } from 'react'
 import { useAppStore } from '../stores/useAppStore'
-import { cn, getPlatformName, getPlatformIcon, PLATFORM_LIST } from '../utils/helpers'
-import { Plus, Trash2, Edit3, CheckCircle, XCircle, Play, Square, Pause, Search, RefreshCw, Users, Settings, ChevronDown, ChevronUp, Mail, Upload, PlayCircle, CheckSquare, Square as EmptySquare } from 'lucide-react'
+import { cn, getPlatformName, getPlatformIcon, PLATFORM_LIST, getStatusLabel, getStatusColor, getProgressColor } from '../utils/helpers'
+import { Plus, Trash2, Edit3, CheckCircle, XCircle, Play, Square, Pause, Search, RefreshCw, Users, Settings, ChevronDown, ChevronUp, Mail, Upload, PlayCircle, CheckSquare, Square as EmptySquare, Loader2 } from 'lucide-react'
 import { motion, AnimatePresence } from 'framer-motion'
 
 const PLATFORM_VIDEO_MODES: Record<string, { value: number; label: string; desc: string }[]> = {
@@ -449,6 +449,7 @@ const AccountsPage: React.FC = () => {
   const [batchMode, setBatchMode] = useState(false)
   const [selectedUids, setSelectedUids] = useState<Set<string>>(new Set())
   const [batchStarting, setBatchStarting] = useState(false)
+  const [batchProgress, setBatchProgress] = useState<{ current: number; total: number; currentName: string } | null>(null)
 
   useEffect(() => {
     fetchAccounts()
@@ -499,28 +500,42 @@ const AccountsPage: React.FC = () => {
   }
 
   const handleStartAll = async () => {
+    const idleAccounts = accounts.filter(a => !a.isRunning)
+    if (idleAccounts.length === 0) { alert('没有可启动的账号'); return }
     setBatchStarting(true)
-    const result = await startAllBrush()
-    setBatchStarting(false)
-    if (result.ok) {
-      alert(`已启动 ${result.success}/${result.total} 个账号`)
-    } else {
-      alert('启动失败: ' + result.msg)
+    setBatchProgress({ current: 0, total: idleAccounts.length, currentName: '' })
+    let success = 0
+    for (let i = 0; i < idleAccounts.length; i++) {
+      const a = idleAccounts[i]
+      setBatchProgress({ current: i + 1, total: idleAccounts.length, currentName: a.remarkName || a.account })
+      const result = await startBrush(a.uid)
+      if (result.ok) success++
+      await new Promise(r => setTimeout(r, 500))
     }
+    setBatchStarting(false)
+    setBatchProgress(null)
+    alert(`批量启动完成: ${success}/${idleAccounts.length} 个账号成功启动`)
   }
 
   const handleBatchStart = async () => {
     if (selectedUids.size === 0) return
+    const uids = Array.from(selectedUids)
     setBatchStarting(true)
-    const result = await startBatchBrush(Array.from(selectedUids))
-    setBatchStarting(false)
-    if (result.ok) {
-      alert(`已启动 ${result.success}/${result.total} 个账号`)
-      setSelectedUids(new Set())
-      setBatchMode(false)
-    } else {
-      alert('启动失败: ' + result.msg)
+    setBatchProgress({ current: 0, total: uids.length, currentName: '' })
+    let success = 0
+    for (let i = 0; i < uids.length; i++) {
+      const uid = uids[i]
+      const acc = accounts.find(a => a.uid === uid)
+      setBatchProgress({ current: i + 1, total: uids.length, currentName: acc?.remarkName || acc?.account || uid })
+      const result = await startBrush(uid)
+      if (result.ok) success++
+      await new Promise(r => setTimeout(r, 500))
     }
+    setBatchStarting(false)
+    setBatchProgress(null)
+    setSelectedUids(new Set())
+    setBatchMode(false)
+    alert(`批量启动完成: ${success}/${uids.length} 个账号成功启动`)
   }
 
   const toggleSelect = (uid: string) => {
@@ -554,7 +569,7 @@ const AccountsPage: React.FC = () => {
             <Upload size={16} />{importing ? '导入中...' : '导入配置'}
           </button>
           <button onClick={handleStartAll} disabled={batchStarting} className={cn("btn-success flex items-center gap-2", batchStarting && "opacity-50")}>
-            <PlayCircle size={16} />{batchStarting ? '启动中...' : '一键启动全部'}
+            <PlayCircle size={16} />{batchStarting && batchProgress ? `启动中 ${batchProgress.current}/${batchProgress.total}` : '一键启动全部'}
           </button>
           <button onClick={() => { setBatchMode(!batchMode); setSelectedUids(new Set()) }}
             className={cn("btn-secondary flex items-center gap-2", batchMode && "bg-accent-600/20 text-accent-400 border-accent-600/30")}>
@@ -581,11 +596,27 @@ const AccountsPage: React.FC = () => {
             </button>
             <button onClick={handleBatchStart} disabled={batchStarting || selectedUids.size === 0}
               className={cn("btn-success text-xs flex items-center gap-1", (batchStarting || selectedUids.size === 0) && "opacity-50")}>
-              <Play size={14} />{batchStarting ? '启动中...' : `启动选中 (${selectedUids.size})`}
+              <Play size={14} />{batchStarting && batchProgress ? `${batchProgress.current}/${batchProgress.total}` : `启动选中 (${selectedUids.size})`}
             </button>
           </>
         )}
       </div>
+
+      {batchStarting && batchProgress && (
+        <div className="glass-card p-3 flex items-center gap-3">
+          <Loader2 size={16} className="text-accent-400 animate-spin flex-shrink-0" />
+          <div className="flex-1">
+            <div className="flex items-center justify-between mb-1">
+              <span className="text-xs text-dark-300">正在启动: {batchProgress.currentName}</span>
+              <span className="text-xs text-dark-400">{batchProgress.current}/{batchProgress.total}</span>
+            </div>
+            <div className="w-full h-1.5 bg-dark-700 rounded-full overflow-hidden">
+              <div className="h-full rounded-full bg-gradient-to-r from-accent-500 to-accent-400 transition-all duration-300"
+                style={{ width: `${(batchProgress.current / batchProgress.total) * 100}%` }} />
+            </div>
+          </div>
+        </div>
+      )}
 
       {filtered.length === 0 ? (
         <div className="glass-card p-12 text-center">
@@ -637,8 +668,29 @@ const AccountsPage: React.FC = () => {
                           <span className="w-1.5 h-1.5 rounded-full bg-accent-400 animate-pulse" />运行中
                         </span>
                       )}
+                      {progress && progress.status && !isRunning && progress.status !== 'idle' && (
+                        <span className={cn("text-xs px-2 py-0.5 rounded-full shrink-0", getStatusColor(progress.status),
+                          progress.status === 'completed' ? 'bg-emerald-600/10' :
+                          progress.status === 'error' ? 'bg-red-600/10' :
+                          progress.status === 'paused' ? 'bg-orange-600/10' : 'bg-dark-700'
+                        )}>
+                          {getStatusLabel(progress.status)}
+                        </span>
+                      )}
                     </div>
                     <p className="text-xs text-dark-500 mt-0.5 truncate">账号: {account.account}</p>
+                    {progress && (progress.progress > 0 || progress.currentTask) && (
+                      <div className="mt-1.5">
+                        <div className="flex items-center justify-between mb-0.5">
+                          <span className="text-[10px] text-dark-500 truncate max-w-[200px]">{progress.currentTask || ''}</span>
+                          <span className="text-[10px] text-dark-500 shrink-0">{(progress.progress ?? 0).toFixed(0)}%</span>
+                        </div>
+                        <div className="w-full h-1 bg-dark-700 rounded-full overflow-hidden">
+                          <div className={cn("h-full rounded-full transition-all duration-500 bg-gradient-to-r", getProgressColor(progress.progress ?? 0))}
+                            style={{ width: `${Math.min(progress.progress ?? 0, 100)}%` }} />
+                        </div>
+                      </div>
+                    )}
                   </div>
 
                   <div className="flex items-center gap-2 flex-shrink-0">
