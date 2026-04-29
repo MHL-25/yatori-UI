@@ -296,7 +296,7 @@ func (a *XXTActivity) run() {
 		}
 		completedCourses++
 		monitor.GlobalEventBus.UpdateCourseProgress(a.Uid, completedCourses, totalCourses)
-		if user.CoursesCustom.VideoModel == 1 {
+		if user.CoursesCustom.VideoModel == 1 || user.CoursesCustom.VideoModel == 3 {
 			a.courseStudy(&course)
 		} else {
 			nodesLock.Add(1)
