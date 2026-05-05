@@ -4,6 +4,8 @@ import (
 	"context"
 	_ "embed"
 	"encoding/json"
+	"log"
+	"os"
 	"path/filepath"
 	"sync"
 	"time"
@@ -16,6 +18,7 @@ import (
 	"github.com/fsnotify/fsnotify"
 	systray "github.com/getlantern/systray"
 	"github.com/wailsapp/wails/v2/pkg/runtime"
+	"github.com/yatori-dev/yatori-go-core/utils"
 )
 
 //go:embed build/windows/icon.ico
@@ -48,7 +51,23 @@ func (a *App) beforeClose(ctx context.Context) bool {
 
 func (a *App) startup(ctx context.Context) {
 	a.ctx = ctx
-	dao.InitDB("yatori.db")
+
+	exePath, err := os.Executable()
+	if err == nil {
+		exeDir := filepath.Dir(exePath)
+		os.Chdir(exeDir)
+		dbPath := filepath.Join(exeDir, "yatori.db")
+		if err := dao.InitDB(dbPath); err != nil {
+			log.Printf("数据库初始化失败: %v", err)
+		}
+	} else {
+		log.Printf("获取可执行文件路径失败: %v", err)
+		if err := dao.InitDB("yatori.db"); err != nil {
+			log.Printf("数据库初始化失败(回退): %v", err)
+		}
+	}
+
+	utils.YatoriCoreInit()
 
 	go a.initSystray()
 
