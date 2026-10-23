@@ -37,7 +37,7 @@ type App struct {
 	launchCount  int
 }
 
-const AppVersion = "1.2.1"
+const AppVersion = "1.2.2"
 
 func NewApp() *App {
 	return &App{notified: make(map[string]time.Time)}

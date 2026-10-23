@@ -345,7 +345,7 @@ const AccountFormFields: React.FC<{
             <div className="flex items-center justify-between">
               <div>
                 <div className="text-sm font-medium text-dark-100">自检日期区间</div>
-                <div className="text-[11px] text-dark-400 mt-0.5">仅在该日期范围内，软件启动后才自动质检并开始刷课</div>
+                <div className="text-[11px] text-dark-400 mt-0.5">未开启或未设置日期时，启动后不会自动质检/刷课</div>
               </div>
               <button onClick={() => setForm({ ...form, selfCheckSw: form.selfCheckSw === 1 ? 0 : 1 })}
                 className={cn("w-10 h-5 rounded-full transition-colors relative shrink-0", form.selfCheckSw === 1 ? "bg-accent-500" : "bg-dark-600")}>

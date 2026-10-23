@@ -140,12 +140,12 @@ func ReadConfig(filePath string) JSONDataForConfig {
 	if err != nil {
 		return configJson
 	}
-	// 旧配置文件没有启动自动化字段时，默认开启
+	// 旧配置文件没有启动自动化字段时，默认关闭，避免启动即刷课
 	if !viper.IsSet("setting.basicSetting.autoCheckSw") {
-		configJson.Setting.BasicSetting.AutoCheckSw = 1
+		configJson.Setting.BasicSetting.AutoCheckSw = 0
 	}
 	if !viper.IsSet("setting.basicSetting.autoStartSw") {
-		configJson.Setting.BasicSetting.AutoStartSw = 1
+		configJson.Setting.BasicSetting.AutoStartSw = 0
 	}
 	return configJson
 }
@@ -166,8 +166,8 @@ func EnsureConfigFile(filePath string) *JSONDataForConfig {
 		cfg.Setting.BasicSetting.LogOutFileSw = 1
 		cfg.Setting.BasicSetting.LogLevel = "INFO"
 		cfg.Setting.BasicSetting.LogModel = 0
-		cfg.Setting.BasicSetting.AutoCheckSw = 1
-		cfg.Setting.BasicSetting.AutoStartSw = 1
+		cfg.Setting.BasicSetting.AutoCheckSw = 0
+		cfg.Setting.BasicSetting.AutoStartSw = 0
 		cfg.Setting.AiSetting.AiType = "TONGYI"
 		cfg.Setting.ApiQueSetting.Url = "http://localhost:8083"
 		SaveConfig(cfg, filePath)
@@ -214,29 +214,29 @@ func CmpCourse(name string, list []string) bool {
 }
 
 // InSelfCheckWindow 判断当前系统日期是否在账号配置的自检日期区间内（含首尾）。
-// 未开启或日期为空时视为不限日期，返回 true。
+// 严格模式：未开启开关、未设置日期或格式错误时一律不自动执行。
 func InSelfCheckWindow(user User, now time.Time) (bool, string) {
 	custom := user.CoursesCustom
 	if custom.SelfCheckSw != 1 {
-		return true, "未启用自检日期区间"
+		return false, "未启用自检日期区间，启动时不自动质检/刷课"
 	}
 	startStr := strings.TrimSpace(custom.SelfCheckStartDate)
 	endStr := strings.TrimSpace(custom.SelfCheckEndDate)
 	if startStr == "" && endStr == "" {
-		return true, "未设置日期区间，按不限日期处理"
+		return false, "未设置自检日期区间，启动时不自动质检/刷课"
 	}
 	var start, end time.Time
 	var err error
 	if startStr != "" {
 		start, err = time.ParseInLocation("2006-01-02", startStr, time.Local)
 		if err != nil {
-			return true, "自检开始日期格式错误，按不限日期处理"
+			return false, "自检开始日期格式错误，已跳过自动任务"
 		}
 	}
 	if endStr != "" {
 		end, err = time.ParseInLocation("2006-01-02", endStr, time.Local)
 		if err != nil {
-			return true, "自检结束日期格式错误，按不限日期处理"
+			return false, "自检结束日期格式错误，已跳过自动任务"
 		}
 	}
 	today := time.Date(now.Year(), now.Month(), now.Day(), 0, 0, 0, 0, time.Local)

@@ -68,6 +68,15 @@ const DisclaimerModal: React.FC<DisclaimerModalProps> = ({ onAccept, readOnly, o
           </div>
 
           <div className="border-t border-dark-700 pt-4">
+            <h3 className="text-accent-400 font-bold text-base mb-3">v1.2.2 修复内容</h3>
+            <ul className="list-disc list-inside space-y-1.5 text-dark-300">
+              <li>【修复】未配置自检日期区间时，启动后仍自动质检/刷课的问题</li>
+              <li>【调整】现在只有开启自检开关且当天在日期区间内，才会自动质检/刷课；否则一律跳过</li>
+              <li>【调整】启动自动质检、自动刷课开关默认关闭，需手动开启</li>
+            </ul>
+          </div>
+
+          <div className="border-t border-dark-700 pt-4">
             <h3 className="text-accent-400 font-bold text-base mb-3">v1.2.1 更新内容</h3>
             <ul className="list-disc list-inside space-y-1.5 text-dark-300">
               <li>【新增】课程质检：单个 / 批量 / 全部账号检测，仪表盘账号卡片可直接质检并进入独立详情页</li>

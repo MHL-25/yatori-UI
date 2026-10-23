@@ -4,7 +4,7 @@
   <p>一款基于 Wails v2 框架构建的跨平台桌面端智能网课辅助工具</p>
   
   <div style="margin: 20px 0;">
-    <img src="https://img.shields.io/badge/Version-1.2.1-blue.svg?style=flat-square" alt="Version">
+    <img src="https://img.shields.io/badge/Version-1.2.2-blue.svg?style=flat-square" alt="Version">
     <img src="https://img.shields.io/badge/Go-1.24.0-00ADD8.svg?style=flat-square&logo=go" alt="Go">
     <img src="https://img.shields.io/badge/Wails-v2.11.0-FF6B6B.svg?style=flat-square" alt="Wails">
     <img src="https://img.shields.io/badge/React-18.2-61DAFB.svg?style=flat-square&logo=react" alt="React">
