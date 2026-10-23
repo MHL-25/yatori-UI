@@ -274,6 +274,22 @@ func (a *App) GetCourseList(uid string) string {
 	return string(jsonData)
 }
 
+// QueryCourseList 使用表单账号密码临时查询课程，不保存账号
+func (a *App) QueryCourseList(jsonReq string) string {
+	var req entity.CourseQueryRequest
+	if err := json.Unmarshal([]byte(jsonReq), &req); err != nil {
+		jsonData, _ := json.Marshal(entity.ErrorResponse("Request parse error: "+err.Error()))
+		return string(jsonData)
+	}
+	courses, err := checker.CourseListByCredentials(req)
+	if err != nil {
+		jsonData, _ := json.Marshal(entity.ErrorResponse(err.Error()))
+		return string(jsonData)
+	}
+	jsonData, _ := json.Marshal(entity.SuccessResponse("OK", courses))
+	return string(jsonData)
+}
+
 // recordLaunch 记录软件打开次数，并按伪随机概率决定是否弹出赞助提示
 func (a *App) recordLaunch() {
 	count, _ := strconv.Atoi(dao.GetSetting("launch_count"))

@@ -34,10 +34,6 @@ export function DisableDonatePrompt() {
   return window['go']['main']['App']['DisableDonatePrompt']();
 }
 
-export function GetDonatePrompt() {
-  return window['go']['main']['App']['GetDonatePrompt']();
-}
-
 export function GetAccountList() {
   return window['go']['main']['App']['GetAccountList']();
 }
@@ -70,6 +66,10 @@ export function GetCourseLocks(arg1) {
   return window['go']['main']['App']['GetCourseLocks'](arg1);
 }
 
+export function GetDonatePrompt() {
+  return window['go']['main']['App']['GetDonatePrompt']();
+}
+
 export function GetPlatforms() {
   return window['go']['main']['App']['GetPlatforms']();
 }
@@ -100,6 +100,10 @@ export function OpenFileDialog(arg1, arg2) {
 
 export function PauseBrush(arg1) {
   return window['go']['main']['App']['PauseBrush'](arg1);
+}
+
+export function QueryCourseList(arg1) {
+  return window['go']['main']['App']['QueryCourseList'](arg1);
 }
 
 export function QuitApp() {

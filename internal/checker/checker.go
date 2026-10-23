@@ -274,6 +274,40 @@ func CourseList(uid string, setting config.Setting) ([]entity.CourseBrief, error
 	return result, nil
 }
 
+// CourseListByCredentials 使用表单中的账号密码临时登录并查询课程，不写入数据库。
+func CourseListByCredentials(req entity.CourseQueryRequest) ([]entity.CourseBrief, error) {
+	if req.AccountType != "XUEXITONG" {
+		return nil, fmt.Errorf("当前平台暂不支持一键查询课程")
+	}
+	if req.Account == "" || req.Password == "" {
+		return nil, fmt.Errorf("请先填写账号和密码")
+	}
+	cache := &xuexitongApi.XueXiTUserCache{Name: req.Account, Password: req.Password}
+	var err error
+	if len(req.Password) < 50 {
+		err = xuexitong.XueXiTLoginAction(cache)
+	} else {
+		err = xuexitong.XueXiTCookieLoginAction(cache)
+	}
+	if err != nil {
+		return nil, fmt.Errorf("登录失败: %w", err)
+	}
+	courses, err := xuexitong.XueXiTPullCourseAction(cache)
+	if err != nil {
+		return nil, err
+	}
+	result := make([]entity.CourseBrief, 0, len(courses))
+	for _, c := range courses {
+		result = append(result, entity.CourseBrief{
+			CourseID:   c.CourseID,
+			CourseName: c.CourseName,
+			JobRate:    c.JobRate,
+			IsStart:    c.IsStart,
+		})
+	}
+	return result, nil
+}
+
 // CheckMany 批量质检指定账号
 func CheckMany(uids []string, setting config.Setting) []*entity.CheckReport {
 	reports := make([]*entity.CheckReport, 0, len(uids))

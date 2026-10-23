@@ -1,6 +1,6 @@
 import { create } from 'zustand'
 import { parseResponse } from '../utils/helpers'
-import { GetAccountList, AddAccount, DeleteAccount, UpdateAccount, LoginCheck, StartBrush, StopBrush, PauseBrush, GetAllProgress, GetConfig, SaveConfig, ImportConfigFile, StartAllBrush, StartBatchBrush, CheckAccount, CheckAccounts, CheckAllAccounts, GetCheckReports, GetCourseList } from '../../wailsjs/go/main/App'
+import { GetAccountList, AddAccount, DeleteAccount, UpdateAccount, LoginCheck, StartBrush, StopBrush, PauseBrush, GetAllProgress, GetConfig, SaveConfig, ImportConfigFile, StartAllBrush, StartBatchBrush, CheckAccount, CheckAccounts, CheckAllAccounts, GetCheckReports, GetCourseList, QueryCourseList } from '../../wailsjs/go/main/App'
 
 interface Account {
   uid: string
@@ -110,6 +110,7 @@ interface AppStore {
   openCheckDetail: (uid: string) => void
   closeCheckDetail: () => void
   fetchCourseList: (uid: string) => Promise<{ ok: boolean; msg: string; courses: CourseBrief[] }>
+  queryCourseList: (data: { accountType: string; url: string; account: string; password: string }) => Promise<{ ok: boolean; msg: string; courses: CourseBrief[] }>
   fetchProgress: () => Promise<void>
   fetchConfig: () => Promise<void>
   saveConfig: (cfg: any) => Promise<{ ok: boolean; msg: string }>
@@ -379,6 +380,19 @@ export const useAppStore = create<AppStore>((set, get) => ({
   fetchCourseList: async (uid) => {
     try {
       const result = await GetCourseList(uid)
+      const resp = parseResponse<CourseBrief[]>(result)
+      if (resp.code === 200) {
+        return { ok: true, msg: 'OK', courses: resp.data || [] }
+      }
+      return { ok: false, msg: resp.message || '课程查询失败', courses: [] }
+    } catch (e: any) {
+      return { ok: false, msg: e?.message || 'Network error', courses: [] }
+    }
+  },
+
+  queryCourseList: async (data) => {
+    try {
+      const result = await QueryCourseList(JSON.stringify(data))
       const resp = parseResponse<CourseBrief[]>(result)
       if (resp.code === 200) {
         return { ok: true, msg: 'OK', courses: resp.data || [] }

@@ -117,6 +117,14 @@ type CourseBrief struct {
 	IsStart    bool    `json:"isStart"`
 }
 
+// CourseQueryRequest 使用表单中的账号密码临时查询课程（不保存账号）
+type CourseQueryRequest struct {
+	AccountType string `json:"accountType"`
+	URL         string `json:"url"`
+	Account     string `json:"account"`
+	Password    string `json:"password"`
+}
+
 type AddAccountRequest struct {
 	AccountType    string            `json:"accountType"`
 	Url            string            `json:"url"`

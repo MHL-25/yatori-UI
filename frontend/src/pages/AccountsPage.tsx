@@ -140,7 +140,7 @@ const AccountFormFields: React.FC<{
 }> = ({ form, setForm, showAdvanced, setShowAdvanced, isEdit, hideIdentity, courseSourceUid }) => {
   const needUrl = ['YINGHUA', 'CANGHUI', 'HQKJ'].includes(form.accountType)
   const needStudyTime = form.accountType === 'WELEARN'
-  const { fetchCourseList } = useAppStore()
+  const { fetchCourseList, queryCourseList } = useAppStore()
   const [coursePicker, setCoursePicker] = useState<'include' | 'exclude' | null>(null)
   const [courseOptions, setCourseOptions] = useState<{ courseId: string; courseName: string; jobRate: number; isStart: boolean }[]>([])
   const [courseKeyword, setCourseKeyword] = useState('')
@@ -148,15 +148,22 @@ const AccountFormFields: React.FC<{
   const [courseLoading, setCourseLoading] = useState(false)
 
   const openCoursePicker = async (mode: 'include' | 'exclude') => {
-    if (!courseSourceUid) {
-      alert('请先保存账号，再使用“一键查询课程”')
+    if (!courseSourceUid && (!form.account || !form.password)) {
+      alert('请先填写账号和密码，再查询课程')
       return
     }
     setCoursePicker(mode)
     setCourseKeyword('')
     setCourseSelected(new Set(mode === 'include' ? form.includeCourses : form.excludeCourses))
     setCourseLoading(true)
-    const result = await fetchCourseList(courseSourceUid)
+    const result = courseSourceUid
+      ? await fetchCourseList(courseSourceUid)
+      : await queryCourseList({
+          accountType: form.accountType,
+          url: form.url,
+          account: form.account,
+          password: form.password,
+        })
     setCourseLoading(false)
     if (!result.ok) {
       alert(result.msg)

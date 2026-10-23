@@ -68,6 +68,22 @@ const DisclaimerModal: React.FC<DisclaimerModalProps> = ({ onAccept, readOnly, o
           </div>
 
           <div className="border-t border-dark-700 pt-4">
+            <h3 className="text-accent-400 font-bold text-base mb-3">v1.2.1 更新内容</h3>
+            <ul className="list-disc list-inside space-y-1.5 text-dark-300">
+              <li>【新增】课程质检：单个 / 批量 / 全部账号检测，仪表盘账号卡片可直接质检并进入独立详情页</li>
+              <li>【新增】前置任务与定时开放调度：受限课程单独串行，定时节点到点自动续刷</li>
+              <li>【新增】账号级自检日期区间、ShowDoc 微信推送、课程一键查询选择器</li>
+              <li>【新增】一键查询课程可直接使用输入的账号密码，无需先保存账号</li>
+              <li>【新增】学习通视频互动测验、拓展阅读、讨论区全部话题 AI 回复</li>
+              <li>【新增】启动次数统计与赞助提示：达到随机次数时提示，可关闭或选择不再提示</li>
+              <li>【新增】爱发电赞助入口（公告顶部、仪表盘、启动提示）</li>
+              <li>【优化】60-30-10 配色与对比度、添加账号三步卡片流程、质检页搜索与独立详情</li>
+              <li>【说明】智慧树平台暂未接入，后续版本再支持</li>
+              <li>【说明】作业强制重做、图片题目 OCR、考试 RSA 签名将在后续版本逐步补齐</li>
+            </ul>
+          </div>
+
+          <div className="border-t border-dark-700 pt-4">
             <h3 className="text-red-400 font-bold text-base mb-3">🔥 v1.1.3 严重Bug修复</h3>
             <ul className="list-disc list-inside space-y-1.5 text-dark-300">
               <li>【关键修复】多任务点模式和正常刷课模式无法使用：移除nodeRun中的调试代码块，恢复正确视频处理逻辑</li>
@@ -110,21 +126,6 @@ const DisclaimerModal: React.FC<DisclaimerModalProps> = ({ onAccept, readOnly, o
               <li>【新增】考试限时提交处理：自动检测限制并延时重新提交</li>
               <li>【修复】暂停后状态标记错误：暂停后不再误显示为"已完成"</li>
               <li>【修复】日志中多处乱码中文字符修复</li>
-            </ul>
-          </div>
-
-          <div className="border-t border-dark-700 pt-4">
-            <h3 className="text-accent-400 font-bold text-base mb-3">v1.2.1 更新内容</h3>
-            <ul className="list-disc list-inside space-y-1.5 text-dark-300">
-              <li>【新增】课程质检：单个 / 批量 / 全部账号检测，仪表盘账号卡片可直接质检并进入独立详情页</li>
-              <li>【新增】前置任务与定时开放调度：受限课程单独串行，定时节点到点自动续刷</li>
-              <li>【新增】账号级自检日期区间、ShowDoc 微信推送、课程一键查询选择器</li>
-              <li>【新增】学习通视频互动测验、拓展阅读、讨论区全部话题 AI 回复</li>
-              <li>【新增】启动次数统计与赞助提示：达到随机次数时提示，可关闭或选择不再提示</li>
-              <li>【新增】爱发电赞助入口（公告顶部、仪表盘、启动提示）</li>
-              <li>【优化】60-30-10 配色与对比度、添加账号三步卡片流程、质检页搜索与独立详情</li>
-              <li>【说明】智慧树平台暂未接入，后续版本再支持</li>
-              <li>【说明】作业强制重做、图片题目 OCR、考试 RSA 签名将在后续版本逐步补齐</li>
             </ul>
           </div>
 

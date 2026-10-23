@@ -17,8 +17,6 @@ export function DeleteAccount(arg1:string):Promise<string>;
 
 export function DisableDonatePrompt():Promise<void>;
 
-export function GetDonatePrompt():Promise<string>;
-
 export function GetAccountList():Promise<string>;
 
 export function GetAiTypes():Promise<string>;
@@ -35,6 +33,8 @@ export function GetCourseList(arg1:string):Promise<string>;
 
 export function GetCourseLocks(arg1:string):Promise<string>;
 
+export function GetDonatePrompt():Promise<string>;
+
 export function GetPlatforms():Promise<string>;
 
 export function GetProgress(arg1:string):Promise<string>;
@@ -50,6 +50,8 @@ export function MinimizeWindow():Promise<void>;
 export function OpenFileDialog(arg1:string,arg2:string):Promise<string>;
 
 export function PauseBrush(arg1:string):Promise<string>;
+
+export function QueryCourseList(arg1:string):Promise<string>;
 
 export function QuitApp():Promise<void>;
 
