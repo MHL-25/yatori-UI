@@ -134,6 +134,10 @@ export function StopBrush(arg1) {
   return window['go']['main']['App']['StopBrush'](arg1);
 }
 
+export function TestAIConnection(arg1) {
+  return window['go']['main']['App']['TestAIConnection'](arg1);
+}
+
 export function ToggleMaximizeWindow() {
   return window['go']['main']['App']['ToggleMaximizeWindow']();
 }

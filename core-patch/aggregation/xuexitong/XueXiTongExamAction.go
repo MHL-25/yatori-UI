@@ -1,0 +1,868 @@
+package xuexitong
+
+import (
+	"bytes"
+	"fmt"
+	"log"
+	"net/url"
+	"regexp"
+	"strconv"
+	"strings"
+
+	"github.com/PuerkitoBio/goquery"
+	"github.com/yatori-dev/yatori-go-core/api/xuexitong"
+	"github.com/yatori-dev/yatori-go-core/models/ctype"
+	"github.com/yatori-dev/yatori-go-core/que-core/aiq"
+	"github.com/yatori-dev/yatori-go-core/que-core/external"
+	"github.com/yatori-dev/yatori-go-core/que-core/qentity"
+	"github.com/yatori-dev/yatori-go-core/que-core/qtype"
+	log2 "github.com/yatori-dev/yatori-go-core/utils/log"
+	"github.com/yatori-dev/yatori-go-core/utils"
+)
+
+// 学习通考试结构体
+type XXTExam struct {
+	Name              string `json:"name"`
+	Status            string `json:"status"`
+	RemainTime        string `json:"remain_time"`
+	RawURL            string `json:"raw_url"`
+	Params            map[string]string
+	CourseId          string `json:"course_id"`
+	UserId            string `json:"user_id"`
+	ClazzId           string `json:"clazz_id"`
+	Type              string `json:"type"`
+	EncTask           string `json:"enc_task"`
+	TaskRefId         string `json:"taskrefId"`
+	MsgId             string `json:"msgId"`
+	CaptchaCaptchaId  string
+	ExamRelationId    string
+	AnswerId          string `json:"answerId"`
+	Cpi               string
+	Validate          string //过验证码用的
+	QuestionTotal     int    //题目数量
+	Enc               string
+	EncRemainTime     string
+	EncLastUpdateTime string
+}
+
+// 考试试卷信息
+type XXTExamPaper struct {
+	CourseId           string
+	TestPaperId        string
+	TestUserRelationId string
+	ClassId            string
+	Type               string
+	IsPhone            string
+	Imei               string
+	SubCount           string
+	RemainTime         string
+	TempSave           string
+	TimeOver           string
+	EncRemainTime      string
+	EncLastUpdateTime  string
+	Cpi                string
+	Enc                string
+	Source             string
+	UserId             string
+	EnterPageTime      string
+	AnsweredView       string
+	ExitdTime          string
+	PaperGroupId       string
+	TypeName           string
+	QuestionTotal      int //一共几道题
+	ExamRelationId     string
+	AnswerId           string
+	//XXTExamQuestion    xuexitong.XXTExamQuestion //题目
+}
+
+type XXTExamQuestion struct {
+	xuexitong.XXTExamQuestionSubmitEntity
+}
+
+// 拉取考试列表
+func PullExamListAction(cache *xuexitong.XueXiTUserCache, course XueXiTCourse) ([]XXTExam, error) {
+	examList := []XXTExam{}
+	examListHtml, err := cache.PullExamListHtmlApi(course.CourseID, course.Key, fmt.Sprintf("%d", course.Cpi), 3, nil)
+	if err != nil {
+		return examList, err
+	}
+	doc, err := goquery.NewDocumentFromReader(strings.NewReader(examListHtml))
+	if err != nil {
+		log.Fatal(err)
+	}
+
+	// 遍历所有 <li>
+	doc.Find("ul.nav li").Each(func(i int, li *goquery.Selection) {
+		rawURL, _ := li.Attr("data")
+
+		// 解析 URL 参数
+		parsed, _ := url.Parse(rawURL)
+		params := map[string]string{}
+		for k, v := range parsed.Query() {
+			if len(v) > 0 {
+				params[k] = v[0]
+			}
+		}
+
+		div := li.Find("div")
+
+		name := strings.TrimSpace(div.Find("p").Text())
+
+		spanList := div.Find("span")
+		status := strings.TrimSpace(spanList.Eq(0).Text())
+
+		remain := ""
+		if spanList.Length() > 1 {
+			remain = strings.TrimSpace(spanList.Eq(1).Text())
+		}
+
+		exam := XXTExam{
+			Name:       name,
+			Status:     status,
+			RemainTime: remain,
+			RawURL:     rawURL,
+			Params:     params,
+			TaskRefId:  params["taskrefId"],
+			CourseId:   params["courseId"],
+			UserId:     params["userId"],
+			ClazzId:    params["clazzId"],
+			Type:       params["type"],
+			EncTask:    params["enc_task"],
+			MsgId:      params["msgId"],
+		}
+		examList = append(examList, exam)
+	})
+
+	return examList, nil
+}
+
+// EnterExamAction 进入考试
+func EnterExamAction(cache *xuexitong.XueXiTUserCache, exam *XXTExam) error {
+	//这一步拉取必要的参数，比如滑块验证码参数等,注意这里的refererUrl会在后面的滑块验证码中用到
+	enterHtml, refererUrl, err := cache.PullExamEnterInformHtmlApi(exam.TaskRefId, exam.MsgId, exam.CourseId, exam.UserId, exam.ClazzId, exam.Type, exam.EncTask, 3, nil)
+	if err != nil {
+		//fmt.Println(refererUrl)
+		return err
+	}
+	doc, err := goquery.NewDocumentFromReader(strings.NewReader(enterHtml))
+	if err != nil {
+		log.Fatal(err)
+	}
+	isReExam := false
+	//如果可以重考
+	if strings.Contains(enterHtml, `bnt_retake">重考</a>`) {
+		reExamUrl, _ := doc.Find("a.bnt_retake").Attr("data")
+		enterHtml, err = cache.PullReExamPaperHtmlApi(reExamUrl)
+		doc, err = goquery.NewDocumentFromReader(strings.NewReader(enterHtml))
+		if err != nil {
+			log.Fatal(err)
+		}
+		isReExam = true
+	}
+
+	re := regexp.MustCompile(`共包含\s*(\d+)\s*道题目`)
+	match := re.FindStringSubmatch(enterHtml)
+
+	if len(match) > 1 {
+		count, _ := strconv.Atoi(match[1])
+		exam.QuestionTotal = count
+	}
+
+	type HiddenField struct {
+		ID    string
+		Name  string
+		Value string
+	}
+
+	var fields []HiddenField
+	// 选择所有隐藏字段
+	doc.Find("input[type='hidden']").Each(func(i int, sel *goquery.Selection) {
+		id, _ := sel.Attr("id")
+		name, _ := sel.Attr("name")
+		value, _ := sel.Attr("value")
+
+		fields = append(fields, HiddenField{
+			ID:    id,
+			Name:  name,
+			Value: value,
+		})
+	})
+
+	// 输出结果
+	for _, f := range fields {
+		if f.ID == "captchaCaptchaId" {
+			exam.CaptchaCaptchaId = f.Value
+		}
+		if f.ID == "testPaperId" {
+			exam.ExamRelationId = f.Value
+		}
+		if f.ID == "testUserRelationId" {
+			exam.AnswerId = f.Value
+		}
+		if f.ID == "cpi" {
+			exam.Cpi = f.Value
+		}
+		//fmt.Printf("ID: %-35s Name: %-20s Value: %s\n", f.ID, f.Name, f.Value)
+	}
+	if exam.CaptchaCaptchaId != "" {
+		slider := XueXiTSlider{
+			CaptchaId: exam.CaptchaCaptchaId,
+			Referer:   refererUrl,
+		}
+		for {
+			validate, passErr := slider.Pass(cache)
+			if passErr != nil {
+				if strings.Contains(passErr.Error(), `"result":false`) {
+					continue
+				}
+			}
+			exam.Validate = validate
+			break //如果成功了那么直接退出循环
+		}
+	}
+	//如果是重考状态那么就先进行重考请求
+	if isReExam {
+
+		_, err := cache.StartReExamApi(exam.ExamRelationId, exam.AnswerId, exam.CourseId, exam.ClazzId)
+		if err != nil {
+			return err
+		}
+
+	}
+	pullPaperHtml, err := cache.PullExamPaperHtmlApi(exam.CourseId, exam.ClazzId, exam.ExamRelationId, "0", exam.AnswerId, exam.Cpi, "1", xuexitong.IMEI, exam.Validate, "0", 3, nil)
+	if err != nil {
+		return err
+
+	}
+	qsEntity, err1 := HtmlQuestionTurnEntity(pullPaperHtml)
+	if err1 != nil {
+		return err1
+	}
+	exam.Enc = qsEntity.Enc
+	exam.EncRemainTime = qsEntity.EncRemainTime
+	exam.EncLastUpdateTime = qsEntity.EncLastUpdateTime
+
+	//fmt.Println(pullPaperHtml)
+	return nil
+}
+
+// 拉取题目
+func (exam *XXTExam) PullExamQuestionAction(cache *xuexitong.XueXiTUserCache, index int /*第几道题*/) (XXTExamQuestion, error) {
+	pullQuestion, err1 := cache.PullExamQuestionApi(exam.CourseId, exam.ClazzId, exam.ExamRelationId, exam.AnswerId, exam.Cpi, exam.EncRemainTime, exam.Enc, exam.EncLastUpdateTime, index)
+	if err1 != nil {
+		return XXTExamQuestion{}, err1
+	}
+	//isLastQuestion := strings.Contains(pullQuestion, `<div class="lastQuestion"> 已经是最后一题了</div>`)
+	qsEntity, err := HtmlQuestionTurnEntity(pullQuestion)
+	//fmt.Println(pullPaperHtml)
+	if err != nil {
+		return XXTExamQuestion{}, err
+	}
+	qsEntity.ExamRelationId = exam.ExamRelationId
+	qsEntity.AnswerId = exam.AnswerId
+	qsEntity.RemainTimeParam = exam.RemainTime
+	qsEntity.Tid = exam.TaskRefId
+	return qsEntity, nil
+}
+
+// AI写题
+func (question *XXTExamQuestion) WriteQuestionForAIAction(cache *xuexitong.XueXiTUserCache, aiUrl, model string, aiType ctype.AiType, apiKey string, visionAiUrl, visionModel string, visionAiType ctype.AiType, visionApiKey string) error {
+	var aiAnswer string
+	var err error
+
+	xuexitong.PrepareQuestionImages(cache, &question.Question)
+	if question.Question.HasImages() && visionApiKey != "" {
+		imageDataMap := make(map[string]qentity.QuestionImage)
+		cookies := cache.GetCookies()
+		for _, img := range question.Question.ContentImages {
+			if img.Url != "" && img.Base64 == "" {
+				downloaded, dlErr := utils.DownloadImageAsQuestionImage(img.Url, cookies)
+				if dlErr == nil {
+					imageDataMap[img.Url] = downloaded
+				}
+			} else {
+				imageDataMap[img.Url] = img
+			}
+		}
+		for _, imgs := range question.Question.OptionImages {
+			for _, img := range imgs {
+				if img.Url != "" && img.Base64 == "" {
+					downloaded, dlErr := utils.DownloadImageAsQuestionImage(img.Url, cookies)
+					if dlErr == nil {
+						imageDataMap[img.Url] = downloaded
+					}
+				} else {
+					imageDataMap[img.Url] = img
+				}
+			}
+		}
+
+		visualMessages := aiq.BuildVisualAiQuestionMessage(question.Question, imageDataMap)
+		aiAnswer, err = aiq.AggregationVisualAIApi(visionAiUrl, visionModel, visionAiType, visualMessages, visionApiKey)
+		if err != nil {
+			log2.Print(log2.INFO, `[`, cache.Name, `] `, log2.BoldRed, "视觉AI异常，尝试本地OCR兜底：", err.Error())
+			ocrFallbackExamQuestion(question)
+			aiChatMessages := aiq.BuildAiQuestionMessage(question.Question)
+			aiAnswer, err = aiq.AggregationAIApi(aiUrl, model, aiType, aiChatMessages, apiKey)
+		}
+	} else {
+		if question.Question.HasImages() {
+			ocrFallbackExamQuestion(question)
+		}
+		aiChatMessages := aiq.BuildAiQuestionMessage(question.Question)
+		aiAnswer, err = aiq.AggregationAIApi(aiUrl, model, aiType, aiChatMessages, apiKey)
+	}
+
+	if err != nil {
+		log2.Print(log2.INFO, `[`, cache.Name, `] `, log2.BoldRed, "Ai异常，返回信息：", err.Error())
+	}
+
+	answers := aiq.ParseQuestionAnswers(question.Question, aiAnswer)
+	if len(answers) == 0 {
+		if question.Question.Type == qtype.FillInTheBlank.String() {
+			answers = make([]string, len(question.Question.Options))
+		} else {
+			answers = []string{"A"}
+		}
+		log2.Print(log2.INFO, "AI回复解析为空，已采用保底答案:", fmt.Sprintf("题目：%v \nAI回复： %v", question.Question.Content, aiAnswer))
+	}
+	question.Question.Answers = answers
+	return nil
+}
+
+// WriteQuestionForVisionOrXXTAIAction 有图优先识图，无图或识图失败继续使用学习通内置AI
+func (question *XXTExamQuestion) WriteQuestionForVisionOrXXTAIAction(cache *xuexitong.XueXiTUserCache,
+	visionAiUrl, visionModel string, visionAiType ctype.AiType, visionApiKey string,
+	classId, courseId, cpi string) error {
+	if !question.Question.HasImages() {
+		return question.WriteQuestionForXXTAIAction(cache, classId, courseId, cpi)
+	}
+	xuexitong.PrepareQuestionImages(cache, &question.Question)
+	if visionApiKey != "" && visionAiUrl != "" {
+		setter := questionAnswerSetter{answers: &question.Question.Answers}
+		err := xuexitong.AnswerQuestionWithVision(cache, question.Question, setter,
+			visionAiUrl, visionModel, visionAiType, visionApiKey)
+		if err == nil {
+			return nil
+		}
+		log2.Print(log2.INFO, `[`, cache.Name, `] `, log2.BoldRed, "识图AI异常，尝试OCR后使用学习通内置AI：", err.Error())
+	}
+	if ocrText := utils.OCRQuestionImages(question.Question); ocrText != "" {
+		question.Question.Content += "\n[图片OCR识别内容]\n" + ocrText
+	}
+	return question.WriteQuestionForXXTAIAction(cache, classId, courseId, cpi)
+}
+
+// ocrFallbackExamQuestion 图片题无法使用识图模型时，尝试本地 OCR 并把文字追加到题干
+func ocrFallbackExamQuestion(question *XXTExamQuestion) {
+	if !question.Question.HasImages() {
+		return
+	}
+	if ocrText := utils.OCRQuestionImages(question.Question); ocrText != "" {
+		question.Question.Content += "\n[图片OCR识别内容]\n" + ocrText
+	}
+}
+
+// 外置题库写题
+func (question *XXTExamQuestion) WriteQuestionForExternalAction(exUrl string) {
+	//赋值选项
+	request, err := external.ApiQueRequest(question.Question, exUrl, 5, nil)
+	if err != nil {
+		log.Fatal(err)
+	}
+	//赋值答案
+	var answers []string
+	if request.Code == 404 {
+		answers = []string{"A"}
+		log2.Print(log2.INFO, "外置题库未找到答案，已使用默认答案A:", fmt.Sprintf("题目：%v \n外置题库回复： %v", question.Question, request))
+		request.Question.Answers = answers
+		return
+	}
+	if request.Question.Answers == nil {
+		answers = []string{"A"}
+		fmt.Println("回复解析错误:", err, fmt.Sprintf("题目：%v \n外置题库回复： %v", question.Question, request))
+		request.Question.Answers = answers
+	}
+	question.Question.Answers = request.Question.Answers
+}
+
+// 学习通内置题库写题
+func (question *XXTExamQuestion) WriteQuestionForXXTAIAction(cache *xuexitong.XueXiTUserCache, classId, courseId, cpi string) error {
+	aiChatMessages := aiq.BuildAiQuestionMessage(question.Question)
+
+	aiAnswer, err := cache.XueXiTongAIAggregation(classId, courseId, cpi, aiChatMessages)
+	if err != nil {
+		log2.Print(log2.INFO, `[`, cache.Name, `] `, log2.BoldRed, "学习通内置AI作答失败：", err.Error())
+		return err
+	}
+	answers := aiq.ParseStringArray(aiAnswer)
+	if len(answers) == 0 {
+		answers = []string{"A"}
+		log2.Print(log2.INFO, "AI回复解析为空，已采用随机答案:", fmt.Sprintf("题目：%v \nAI回复： %v", aiChatMessages, aiAnswer))
+	}
+	question.Question.Answers = answers
+	return nil
+}
+
+// 提交学习通考试答案
+func (question *XXTExamQuestion) SubmitExamAnswerAction(cache *xuexitong.XueXiTUserCache, isSubmit bool /*是否提交，true为提交，false为暂存*/) (string, error) {
+	//api, err := cache.SubmitExamAnswerApi(exam.ClazzId, exam.CourseId, exam.Paper.TestPaperId, exam.Paper.TestUserRelationId, exam.Cpi, exam.Paper.RemainTime, exam.Paper.EncRemainTime, exam.Paper.EncLastUpdateTime, exam.ExamRelationId, exam.AnswerId, exam.RemainTime, !isSubmit, exam.Paper.Enc, exam.Paper.EnterPageTime, exam.Paper.XXTExamQuestion.QuestionId, exam.Paper.Type, exam.Paper.XXTExamQuestion.TypeName, &exam.Paper)
+	api, err := cache.SubmitExamAnswerApi(&question.XXTExamQuestionSubmitEntity, !isSubmit)
+	if err != nil {
+		return "", err
+	}
+	//fmt.Println(api)
+	return api, nil
+}
+
+// html转Exam实体
+func HtmlQuestionTurnEntity(paperHtml string) (XXTExamQuestion, error) {
+	//xxtExamPaper := XXTExamPaper{}
+	question := XXTExamQuestion{}
+	// 使用 goquery 解析 HTML
+	paperDoc, err := goquery.NewDocumentFromReader(bytes.NewReader([]byte(paperHtml)))
+	if err != nil {
+		log.Fatal(err)
+	}
+	questionId, exists := paperDoc.Find("#questionId").Attr("value") //题目id
+	if exists {
+		//fmt.Println("question:", questionId)
+		log2.Print(log2.DEBUG, questionId)
+	}
+	questionTypeCode, exists := paperDoc.Find(`input[name="` + `type` + questionId + `"]`).Attr("value")
+	if exists {
+		question.QuestionTypeCode = questionTypeCode
+		log2.Print(log2.DEBUG, questionTypeCode)
+		//fmt.Println("questionType:", questionTypeCode)
+	}
+	questionTypeStr, exists := paperDoc.Find(`input[name="` + `typeName` + questionId + `"]`).Attr("value")
+	if exists {
+		question.QuestionTypeStr = questionTypeStr
+		log2.Print(log2.DEBUG, questionTypeStr)
+		//fmt.Println("questionType:", questionTypeStr)
+	}
+
+	get := func(id string) string {
+		v, _ := paperDoc.Find("#" + id).Attr("value")
+		return v
+	}
+	getForName := func(id string) string {
+		v, _ := paperDoc.Find(`input[name="` + id + `"]`).Attr("value")
+		return v
+	}
+
+	switch questionTypeCode {
+	case "0": //单选题
+		turn, err1 := singleTurn(paperDoc)
+		if err1 != nil {
+			fmt.Println(err1)
+		}
+		question = turn
+		//fmt.Println(turn)
+	case "1": //多选题
+		turn, err1 := multipleTurn(paperDoc)
+		if err1 != nil {
+			fmt.Println(err1)
+		}
+		question = turn
+		//fmt.Println(turn)
+	case "2": //填空题
+		turn, err1 := fillTurn(paperDoc)
+		if err1 != nil {
+			fmt.Println(err1)
+		}
+		question = turn
+		//fmt.Println(turn)
+	case "3": //判断题
+		turn, err1 := trueOrFalseTurn(paperDoc)
+		if err1 != nil {
+			fmt.Println(err1)
+		}
+		question = turn
+		//fmt.Println(turn)
+	case "4": //简答题
+		turn, err1 := shortAnswerTurn(paperDoc)
+		if err1 != nil {
+			fmt.Println(err1)
+		}
+		question = turn
+		//fmt.Println(turn)
+	case "6": //论述题
+		turn, err1 := essayTurn(paperDoc)
+		if err1 != nil {
+			fmt.Println(err1)
+		}
+		question = turn
+		//fmt.Println(turn)
+	case "11": //连线题
+		turn, err1 := matchingTurn(paperDoc)
+		if err1 != nil {
+			fmt.Println(err1)
+		}
+		question = turn
+	default:
+		fmt.Printf("未知题型%s   %s", questionTypeCode, questionTypeStr)
+	}
+	question.CourseId = get("courseId")
+	question.TestPaperId = get("testPaperId")
+	question.TestUserRelationId = get("testUserRelationId")
+	question.ClassId = get("classId")
+	question.Type = get("type")
+	question.IsPhone = get("isphone")
+	question.Imei = get("imei")
+	question.SubCount = get("subCount")
+	question.RemainTime = get("remainTime")
+	question.TempSave = get("tempSave")
+	question.TimeOver = get("timeOver")
+	question.EncRemainTime = get("encRemainTime")
+	question.EncLastUpdateTime = get("encLastUpdateTime")
+	question.Cpi = get("cpi")
+	question.Enc = get("enc")
+	question.Source = get("source")
+	question.UserId = get("userId")
+	question.EnterPageTime = get("enterPageTime")
+	question.AnsweredView = get("answeredView")
+	question.ExitdTime = get("exitdtime")
+	question.PaperGroupId = get("paperGroupId")
+	question.Source = getForName("score" + questionId)
+	question.QuestionTypeCode = questionTypeCode
+	question.QuestionTypeStr = questionTypeStr
+	return question, nil
+}
+
+// 清洗题目数据
+func extractQuestion(tit *goquery.Selection) string {
+	var sb strings.Builder
+
+	tit.Contents().Each(func(i int, s *goquery.Selection) {
+
+		// 1️⃣ 跳过 h3
+		if goquery.NodeName(s) == "h3" {
+			return
+		}
+
+		// 2️⃣ 跳过 span
+		if goquery.NodeName(s) == "span" {
+			v, exists := s.Attr("aria-label")
+			if exists {
+				if v == "题干" {
+					return
+				}
+			}
+		}
+
+		// 3️⃣ 如果是 p，递归处理其内容
+		if goquery.NodeName(s) == "p" {
+			sb.WriteString(extractQuestion(s))
+			return
+		}
+
+		// 4️⃣ 文本节点
+		text := strings.TrimSpace(s.Text())
+		if text != "" {
+			sb.WriteString(text)
+		}
+	})
+
+	return strings.TrimSpace(sb.String())
+}
+
+func extractImagesFromSelection(sel *goquery.Selection, baseURL string) []qentity.QuestionImage {
+	var images []qentity.QuestionImage
+	seen := make(map[string]bool)
+	sel.Find("img").Each(func(i int, img *goquery.Selection) {
+		src, exists := img.Attr("src")
+		if !exists || src == "" {
+			return
+		}
+		if strings.HasPrefix(src, "//") {
+			src = "https:" + src
+		} else if strings.HasPrefix(src, "/") && baseURL != "" {
+			src = baseURL + src
+		}
+		if seen[src] {
+			return
+		}
+		seen[src] = true
+		alt, _ := img.Attr("alt")
+		images = append(images, qentity.QuestionImage{
+			Url:     src,
+			AltText: alt,
+		})
+	})
+	return images
+}
+
+func extractOptionImages(sel *goquery.Selection, letter string, baseURL string) []qentity.QuestionImage {
+	var images []qentity.QuestionImage
+	seen := make(map[string]bool)
+	sel.Find("img").Each(func(i int, img *goquery.Selection) {
+		src, exists := img.Attr("src")
+		if !exists || src == "" {
+			return
+		}
+		if strings.HasPrefix(src, "//") {
+			src = "https:" + src
+		} else if strings.HasPrefix(src, "/") && baseURL != "" {
+			src = baseURL + src
+		}
+		if seen[src] {
+			return
+		}
+		seen[src] = true
+		alt, _ := img.Attr("alt")
+		images = append(images, qentity.QuestionImage{
+			Url:     src,
+			AltText: alt,
+		})
+	})
+	return images
+}
+
+// 单选题转换
+func singleTurn(paperDoc *goquery.Document) (XXTExamQuestion, error) {
+	question := XXTExamQuestion{}
+	question.QType = qtype.SingleChoice
+	question.Question.Type = question.QType.String()
+	paperDoc.Find("div.questionWrap").Each(func(i int, sel *goquery.Selection) {
+		questionId, exists := sel.Attr("data")
+		if exists {
+			question.QuestionId = questionId
+		}
+
+		title := ""
+		sel.Find(`.tit`).Each(func(i int, sel *goquery.Selection) {
+			title = extractQuestion(sel)
+			question.Question.ContentImages = extractImagesFromSelection(sel, "https://mooc1.chaoxing.com")
+		})
+		question.Question.Content = title
+		resOptions := make(map[string]string)
+		question.Question.OptionImages = make(map[string][]qentity.QuestionImage)
+		sel.Find(`.singleChoice`).Each(func(i int, optSel *goquery.Selection) {
+			letter, _ := optSel.Attr(`name`)
+			text := strings.TrimSpace(optSel.Find(`.answerInfo cc`).Text())
+			imgs := extractOptionImages(optSel, letter, "https://mooc1.chaoxing.com")
+			if letter == "" || (text == "" && len(imgs) == 0) {
+				return
+			}
+			resOptions[letter] = text
+			if len(imgs) > 0 {
+				question.Question.OptionImages[letter] = imgs
+			}
+		})
+		resSelect := []string{"A", "B", "C", "D", "E", "F", "G", "H", "I", "J", "K", "L", "M", "N"}
+		for _, slt := range resSelect {
+			if _, ok := resOptions[slt]; !ok {
+				break
+			}
+			question.Question.Options = append(question.Question.Options, resOptions[slt])
+		}
+
+	})
+	return question, nil
+}
+
+// 多选题转换
+func multipleTurn(paperDoc *goquery.Document) (XXTExamQuestion, error) {
+	question := XXTExamQuestion{}
+	question.QType = qtype.MultipleChoice
+	question.Question.Type = question.QType.String()
+
+	paperDoc.Find("div.questionWrap").Each(func(i int, sel *goquery.Selection) {
+		questionId, exists := sel.Attr("data")
+		if exists {
+			question.QuestionId = questionId
+		}
+		typeName, exists := paperDoc.Find(`input[name="` + `typeName` + questionId + `"]`).Attr("value")
+		if exists {
+			question.TypeName = typeName
+		}
+
+		title := ""
+		sel.Find(`.tit`).Each(func(i int, sel *goquery.Selection) {
+			title = extractQuestion(sel)
+			question.Question.ContentImages = extractImagesFromSelection(sel, "https://mooc1.chaoxing.com")
+		})
+		question.Question.Content = title
+		resOptions := make(map[string]string)
+		question.Question.OptionImages = make(map[string][]qentity.QuestionImage)
+		sel.Find(`.mulChoice`).Each(func(i int, optSel *goquery.Selection) {
+			letter, _ := optSel.Attr(`name`)
+			text := strings.TrimSpace(optSel.Find(`.answerInfo cc`).Text())
+			imgs := extractOptionImages(optSel, letter, "https://mooc1.chaoxing.com")
+			if letter == "" || (text == "" && len(imgs) == 0) {
+				return
+			}
+			resOptions[letter] = text
+			if len(imgs) > 0 {
+				question.Question.OptionImages[letter] = imgs
+			}
+		})
+		resSelect := []string{"A", "B", "C", "D", "E", "F", "G", "H", "I", "J", "K", "L", "M", "N"}
+		for _, slt := range resSelect {
+			if _, ok := resOptions[slt]; !ok {
+				break
+			}
+			question.Question.Options = append(question.Question.Options, resOptions[slt])
+		}
+
+	})
+	return question, nil
+}
+
+// 填空题转换
+func fillTurn(paperDoc *goquery.Document) (XXTExamQuestion, error) {
+	question := XXTExamQuestion{}
+	question.QType = qtype.FillInTheBlank
+	question.Question.Type = question.QType.String()
+	paperDoc.Find("div.questionWrap").Each(func(i int, sel *goquery.Selection) {
+		questionId, exists := sel.Attr("data")
+		if exists {
+			question.QuestionId = questionId
+		}
+		typeName, exists := paperDoc.Find(`input[name="` + `typeName` + questionId + `"]`).Attr("value")
+		if exists {
+			question.TypeName = typeName
+		}
+
+		title := ""
+		sel.Find(`.tit`).Each(func(i int, sel *goquery.Selection) {
+			title = extractQuestion(sel)
+			question.Question.ContentImages = extractImagesFromSelection(sel, "https://mooc1.chaoxing.com")
+		})
+		question.Question.Content = title
+		sel.Find(`.completionList`).Each(func(i int, sel *goquery.Selection) {
+			letter := strings.TrimSpace(sel.Find(`.grayTit`).Text())
+			question.Question.Options = append(question.Question.Options, letter)
+		})
+
+	})
+	return question, nil
+}
+
+// 判断题
+func trueOrFalseTurn(paperDoc *goquery.Document) (XXTExamQuestion, error) {
+	question := XXTExamQuestion{}
+	question.QType = qtype.TrueOrFalse
+	question.Question.Type = question.QType.String()
+	paperDoc.Find("div.questionWrap").Each(func(i int, sel *goquery.Selection) {
+		questionId, exists := sel.Attr("data")
+		if exists {
+			question.QuestionId = questionId
+		}
+		typeName, exists := paperDoc.Find(`input[name="` + `typeName` + questionId + `"]`).Attr("value")
+		if exists {
+			question.TypeName = typeName
+		}
+
+		title := ""
+		sel.Find(`.tit`).Each(func(i int, sel *goquery.Selection) {
+			title = extractQuestion(sel)
+			question.Question.ContentImages = extractImagesFromSelection(sel, "https://mooc1.chaoxing.com")
+		})
+		question.Question.Content = title
+		sel.Find(`.answerList`).Each(func(i int, sel *goquery.Selection) {
+			letter := strings.TrimSpace(sel.Find(`.No`).Text())
+			text := strings.TrimSpace(sel.Find(`.answerInfo`).Text())
+			question.Question.Options = append(question.Question.Options, letter+text)
+		})
+
+	})
+	return question, nil
+}
+
+func shortAnswerTurn(paperDoc *goquery.Document) (XXTExamQuestion, error) {
+	question := XXTExamQuestion{}
+	question.QType = qtype.ShortAnswer
+	question.Question.Type = question.QType.String()
+	paperDoc.Find("div.questionWrap").Each(func(i int, sel *goquery.Selection) {
+		questionId, exists := sel.Attr("data")
+		if exists {
+			question.QuestionId = questionId
+		}
+		typeName, exists := paperDoc.Find(`input[name="` + `typeName` + questionId + `"]`).Attr("value")
+		if exists {
+			question.TypeName = typeName
+		}
+
+		title := ""
+		sel.Find(`.tit`).Each(func(i int, sel *goquery.Selection) {
+			title = extractQuestion(sel)
+			question.Question.ContentImages = extractImagesFromSelection(sel, "https://mooc1.chaoxing.com")
+		})
+		question.Question.Content = title
+		sel.Find(`.completionList`).Each(func(i int, sel *goquery.Selection) {
+			letter := strings.TrimSpace(sel.Find(`.grayTit`).Text())
+			question.Question.Options = append(question.Question.Options, letter)
+		})
+
+	})
+	return question, nil
+}
+
+func essayTurn(paperDoc *goquery.Document) (XXTExamQuestion, error) {
+	question := XXTExamQuestion{}
+	question.QType = qtype.Essay
+	question.Question.Type = question.QType.String()
+	paperDoc.Find("div.questionWrap").Each(func(i int, sel *goquery.Selection) {
+		questionId, exists := sel.Attr("data")
+		if exists {
+			question.QuestionId = questionId
+		}
+		typeName, exists := paperDoc.Find(`input[name="` + `typeName` + questionId + `"]`).Attr("value")
+		if exists {
+			question.TypeName = typeName
+		}
+
+		title := ""
+		sel.Find(`.tit`).Each(func(i int, sel *goquery.Selection) {
+			title = extractQuestion(sel)
+			question.Question.ContentImages = extractImagesFromSelection(sel, "https://mooc1.chaoxing.com")
+		})
+		question.Question.Content = title
+		sel.Find(`.completionList`).Each(func(i int, sel *goquery.Selection) {
+			letter := strings.TrimSpace(sel.Find(`.grayTit`).Text())
+			question.Question.Options = append(question.Question.Options, letter)
+		})
+
+	})
+	return question, nil
+}
+
+// matchingTurn 连线题转换
+func matchingTurn(paperDoc *goquery.Document) (XXTExamQuestion, error) {
+	question := XXTExamQuestion{}
+	question.QType = qtype.Matching
+	question.Question.Type = question.QType.String()
+	paperDoc.Find("div.questionWrap").Each(func(i int, sel *goquery.Selection) {
+		questionId, exists := sel.Attr("data")
+		if exists {
+			question.QuestionId = questionId
+		}
+		typeName, exists := paperDoc.Find(`input[name="` + `typeName` + questionId + `"]`).Attr("value")
+		if exists {
+			question.TypeName = typeName
+		}
+		title := ""
+		sel.Find(`.tit`).Each(func(i int, sel *goquery.Selection) {
+			title = extractQuestion(sel)
+			question.Question.ContentImages = extractImagesFromSelection(sel, "https://mooc1.chaoxing.com")
+		})
+		question.Question.Content = title
+		options := []string{}
+		selects := []string{}
+		sel.Find("ul.answerList-line").Each(func(i int, s *goquery.Selection) {
+			if i%2 == 0 {
+				s.Find("li").Each(func(_ int, li *goquery.Selection) {
+					options = append(options, strings.TrimSpace(li.Text()))
+				})
+			} else {
+				s.Find("li").Each(func(_ int, li *goquery.Selection) {
+					selects = append(selects, strings.TrimSpace(li.Text()))
+				})
+			}
+		})
+		question.Question.Options = buildMatchingStandardOptions(options, selects)
+	})
+	return question, nil
+}

@@ -68,6 +68,133 @@ const DisclaimerModal: React.FC<DisclaimerModalProps> = ({ onAccept, readOnly, o
           </div>
 
           <div className="border-t border-dark-700 pt-4">
+            <h3 className="text-accent-400 font-bold text-base mb-3">v1.2.15 更新内容</h3>
+            <ul className="list-disc list-inside space-y-1.5 text-dark-300">
+              <li>【修复】填空题把 AI 开场白、编号说明当成答案填入多个空位的问题</li>
+              <li>【优化】填空题提示词按空位数量强制输出等长 JSON 数组，并在题干中标注 [第N空]</li>
+              <li>【优化】填空题答案严格校验空位数量，保留重复答案，不再因去重导致空位错位</li>
+              <li>【优化】AI 无法给出有效答案时填空留空，不再用单个“A”填充所有空位</li>
+              <li>【说明】测试账号“机械制图B / 10.7 读装配图及拆画零件图”仅做拉题与模型校验，未提交答案</li>
+            </ul>
+          </div>
+
+          <div className="border-t border-dark-700 pt-4">
+            <h3 className="text-accent-400 font-bold text-base mb-3">v1.2.14 更新内容</h3>
+            <ul className="list-disc list-inside space-y-1.5 text-dark-300">
+              <li>【修复】监控页偶发“页面渲染出错：Cannot read properties of null (reading 'length')”</li>
+              <li>【修复】进度事件中的空日志不再序列化为 <code>null</code>，统一返回空数组</li>
+              <li>【优化】前端对日志、质检课程列表做空值兜底，旧数据也不会导致页面崩溃</li>
+            </ul>
+          </div>
+
+          <div className="border-t border-dark-700 pt-4">
+            <h3 className="text-accent-400 font-bold text-base mb-3">v1.2.13 更新内容</h3>
+            <ul className="list-disc list-inside space-y-1.5 text-dark-300">
+              <li>【修复】学习通内置 AI 请求失败不再中断整个账号刷课，改为记录日志并跳过该题</li>
+              <li>【修复】配置热重载账号查询参数写反，避免导入/保存配置后重复添加账号</li>
+              <li>【修复】定时开放节点启动失败后不再被误标为已处理，可继续自动续刷</li>
+              <li>【修复】进度事件改为快照派发，消除数据竞争并保证日志顺序</li>
+              <li>【修复】英华接口异常空指针、识图失败补充本地 OCR 兜底</li>
+              <li>【优化】学习通弹题支持图片检测，含图时自动切换识图模型</li>
+              <li>【优化】图片下载限制 5MB，避免超大图片占用过多内存；AI 接口恢复 TLS 证书校验</li>
+            </ul>
+          </div>
+
+          <div className="border-t border-dark-700 pt-4">
+            <h3 className="text-accent-400 font-bold text-base mb-3">v1.2.12 更新内容</h3>
+            <ul className="list-disc list-inside space-y-1.5 text-dark-300">
+              <li>【新增】答题前先检测题目是否包含图片：含图自动切换配置的识图模型，不含图继续使用文本模型</li>
+              <li>【新增】学习通内置 AI（纯文本）同样支持分流：题目含图时自动改用识图模型，无图仍走内置 AI</li>
+              <li>【优化】章节测验、作业、考试的识图链路统一：识图失败 → 本地 OCR → 文本/内置 AI 兜底</li>
+              <li>【说明】目前仅学习通与英华具备题目图片解析字段，青书、学习公社、智慧职教、WeLearn 等平台暂无图片检测</li>
+            </ul>
+          </div>
+
+          <div className="border-t border-dark-700 pt-4">
+            <h3 className="text-accent-400 font-bold text-base mb-3">v1.2.11 更新内容</h3>
+            <ul className="list-disc list-inside space-y-1.5 text-dark-300">
+              <li>【修复】AI 返回 JSON 对象（如 <code>{'{"color":"红色"}'}</code>）时不再报“无法解析成 json”</li>
+              <li>【优化】AI 回复解析改为宽松提取，兼容 JSON 数组、对象、代码块、&lt;think&gt; 思考内容和纯文本</li>
+              <li>【优化】选择题、判断题、填空题、简答题、连线题均使用统一宽松解析，减少答题失败</li>
+              <li>【优化】识图模型连接测试会直接展示提取后的结果，例如“红色”</li>
+            </ul>
+          </div>
+
+          <div className="border-t border-dark-700 pt-4">
+            <h3 className="text-accent-400 font-bold text-base mb-3">v1.2.10 更新内容</h3>
+            <ul className="list-disc list-inside space-y-1.5 text-dark-300">
+              <li>【优化】AI 接口错误会原样显示，不再把 1305 等业务错误误报为“回复内容未找到”</li>
+              <li>【优化】模型访问量过大（1305）、限流（429）、服务端 5xx 时自动等待并重试</li>
+              <li>【优化】识图模型连接测试改为图片在前、文字在后，并加大测试图片尺寸</li>
+              <li>【提示】GLM-4.6V-Flash 等免费视觉模型高峰期可能持续返回 1305，可稍后重试或改用非 flash 视觉模型</li>
+            </ul>
+          </div>
+
+          <div className="border-t border-dark-700 pt-4">
+            <h3 className="text-accent-400 font-bold text-base mb-3">v1.2.9 更新内容</h3>
+            <ul className="list-disc list-inside space-y-1.5 text-dark-300">
+              <li>【新增】英华学堂课程质检：课程列表、章节节点、完成度、锁定状态与定时开放</li>
+              <li>【新增】英华学堂一键查询课程支持，可直接用账号密码或 Cookie 查询</li>
+              <li>【修复】OpenAI 类型不再强制请求 api.openai.com，会使用你填写的兼容接口地址</li>
+              <li>【修复】OpenAI 接口改为标准 chat/completions 请求格式，兼容智谱 GLM 等第三方服务</li>
+              <li>【新增】AI 密钥、账号密码/Cookie 输入框增加显示/隐藏按钮</li>
+              <li>【优化】保存与测试时会自动去除密钥、模型名、URL 首尾空白，避免复制粘贴带空格导致失败</li>
+            </ul>
+          </div>
+
+          <div className="border-t border-dark-700 pt-4">
+            <h3 className="text-accent-400 font-bold text-base mb-3">v1.2.8 更新内容</h3>
+            <ul className="list-disc list-inside space-y-1.5 text-dark-300">
+              <li>【新增】纯文本模型与识图模型均增加“连接测试”按钮，保存前可先验证 API 是否可用</li>
+              <li>【新增】识图模型测试会发送一张测试图片，可同时验证模型是否支持视觉输入</li>
+              <li>【修复】英华学堂登录失败：支持直接粘贴浏览器 Cookie/token 登录</li>
+              <li>【修复】英华平台 URL 可填写登录页地址，会自动归一化为站点根地址</li>
+              <li>【验证】英华 Cookie 登录、课程列表、章节节点、提交学时链路均已实测通过</li>
+            </ul>
+          </div>
+
+          <div className="border-t border-dark-700 pt-4">
+            <h3 className="text-accent-400 font-bold text-base mb-3">v1.2.7 更新内容</h3>
+            <ul className="list-disc list-inside space-y-1.5 text-dark-300">
+              <li>【新增】章节测验接入识图模型：题干图片、公式图片、A/B/C/D 选项图片都会发送给视觉模型作答</li>
+              <li>【修复】纯图片选项不再被丢弃，视觉提示词会按选项字母标注每张图片</li>
+              <li>【新增】本地 OCR 兜底：未配置识图模型或识图失败时，使用 Windows 自带 OCR 提取图片文字后再交给文本模型</li>
+              <li>【新增】图片统一缓存到软件目录 data/images，不再散落到临时目录</li>
+              <li>【新增】图片缓存定时清理：每 6 小时清理一次，自动删除超过 3 天的图片</li>
+              <li>【说明】公式类图片的本地 OCR 识别能力有限，复杂公式建议优先配置识图模型</li>
+            </ul>
+          </div>
+
+          <div className="border-t border-dark-700 pt-4">
+            <h3 className="text-accent-400 font-bold text-base mb-3">v1.2.6 更新内容</h3>
+            <ul className="list-disc list-inside space-y-1.5 text-dark-300">
+              <li>【修复】学习通章节测验连线题无法作答：按官方格式提交连线答案，实测可正常完成</li>
+              <li>【修复】连线题 AI 答案解析兼容 JSON 数组、对象数组与文本箭头格式，不再解析失败</li>
+              <li>【新增】作业与考试同步支持连线题（题型 11）自动解析与提交</li>
+              <li>【修复】仅含连线题的测验被误判为“无题目”而跳过</li>
+              <li>【优化】知识拓展气泡图（ballchart）识别为非任务点，不再提示未知任务点</li>
+            </ul>
+          </div>
+
+          <div className="border-t border-dark-700 pt-4">
+            <h3 className="text-accent-400 font-bold text-base mb-3">v1.2.5 修复内容</h3>
+            <ul className="list-disc list-inside space-y-1.5 text-dark-300">
+              <li>【修复】课程已完成后仍重复刷互动测验的问题，完成课程会直接跳过弹题及收尾任务</li>
+              <li>【修复】互动测验清单会过滤已完成视频，不再把已答完的视频统计为待完成</li>
+              <li>【优化】连续 3 个视频拿不到有效答案时自动跳过本课程弹题，避免刷屏和空转</li>
+            </ul>
+          </div>
+
+          <div className="border-t border-dark-700 pt-4">
+            <h3 className="text-accent-400 font-bold text-base mb-3">v1.2.4 更新内容</h3>
+            <ul className="list-disc list-inside space-y-1.5 text-dark-300">
+              <li>【修复】视频互动测验提示“无法解析答案”：正确解析选项 description 字段，并支持按选项文本、判断词和说明式字母作答</li>
+              <li>【优化】弹题 AI 返回无法解析时，日志会附带原始返回内容，便于定位</li>
+              <li>【优化】账号管理与仪表盘：正在运行的账号优先排在前面，同组内按名称排序</li>
+            </ul>
+          </div>
+
+          <div className="border-t border-dark-700 pt-4">
             <h3 className="text-accent-400 font-bold text-base mb-3">v1.2.3 更新内容</h3>
             <ul className="list-disc list-inside space-y-1.5 text-dark-300">
               <li>【新增】多账号启动自动质检改为并发处理，最多 5 个账号同时进行，不再逐个等待</li>

@@ -15,13 +15,14 @@ const CheckDetailPage: React.FC = () => {
   const uid = checkDetailUid || ''
   const report = uid ? checkReports[uid] : undefined
   const account = accounts.find((a) => a.uid === uid)
+  const reportCourses = report?.courses || []
 
   const filteredCourses = useMemo(() => {
     if (!report) return []
     const kw = keyword.trim().toLowerCase()
-    if (!kw) return report.courses
-    return report.courses.filter((c) => c.courseName.toLowerCase().includes(kw))
-  }, [report, keyword])
+    if (!kw) return reportCourses
+    return reportCourses.filter((c) => c.courseName.toLowerCase().includes(kw))
+  }, [report, reportCourses, keyword])
 
   const stats = report ? [
     { label: '课程总数', value: report.totalCourses, tone: 'text-dark-100' },
@@ -97,7 +98,7 @@ const CheckDetailPage: React.FC = () => {
                   className="input-field pl-9"
                 />
               </div>
-              <span className="text-xs text-dark-400">显示 {filteredCourses.length} / {report.courses.length} 门</span>
+              <span className="text-xs text-dark-400">显示 {filteredCourses.length} / {reportCourses.length} 门</span>
             </div>
 
             <div className="space-y-2.5">

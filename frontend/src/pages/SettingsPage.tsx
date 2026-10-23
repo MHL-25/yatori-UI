@@ -1,8 +1,9 @@
 import React, { useEffect, useState } from 'react'
 import { useAppStore } from '../stores/useAppStore'
-import { cn, AI_TYPE_LIST, APP_VERSION } from '../utils/helpers'
-import { Settings, Save, Brain, Mail, Server, Info, ExternalLink, Eye, FileText } from 'lucide-react'
+import { cn, AI_TYPE_LIST, APP_VERSION, parseResponse } from '../utils/helpers'
+import { Settings, Save, Brain, Mail, Server, Info, ExternalLink, Eye, EyeOff, FileText, Loader2, CheckCircle2, XCircle } from 'lucide-react'
 import { motion } from 'framer-motion'
+import { TestAIConnection } from '../../wailsjs/go/main/App'
 
 const SettingsPage: React.FC = () => {
   const { config, fetchConfig, saveConfig } = useAppStore()
@@ -26,6 +27,10 @@ const SettingsPage: React.FC = () => {
   const [emailUser, setEmailUser] = useState('')
   const [emailPass, setEmailPass] = useState('')
   const [saving, setSaving] = useState(false)
+  const [textTest, setTextTest] = useState<{ status: 'idle' | 'testing' | 'success' | 'error'; message: string }>({ status: 'idle', message: '' })
+  const [visionTest, setVisionTest] = useState<{ status: 'idle' | 'testing' | 'success' | 'error'; message: string }>({ status: 'idle', message: '' })
+  const [showAiKey, setShowAiKey] = useState(false)
+  const [showVisionKey, setShowVisionKey] = useState(false)
 
   useEffect(() => { fetchConfig() }, [])
 
@@ -58,8 +63,8 @@ const SettingsPage: React.FC = () => {
       const cfg = {
         setting: {
           basicSetting: { completionTone, logLevel, colorLog: 1, logOutFileSw: 1, logModel: 0, autoCheckSw, autoStartSw },
-          aiSetting: { aiType, aiUrl, model: aiModel, API_KEY: aiApiKey },
-          visionAiSetting: { aiType: visionAiType, aiUrl: visionAiUrl, model: visionAiModel, API_KEY: visionAiApiKey },
+          aiSetting: { aiType, aiUrl: aiUrl.trim(), model: aiModel.trim(), API_KEY: aiApiKey.trim() },
+          visionAiSetting: { aiType: visionAiType, aiUrl: visionAiUrl.trim(), model: visionAiModel.trim(), API_KEY: visionAiApiKey.trim() },
           apiQueSetting: { url: apiQueUrl },
           emailInform: { sw: emailSw, smtpHost, smtpPort, userName: emailUser, password: emailPass },
         },
@@ -69,6 +74,47 @@ const SettingsPage: React.FC = () => {
     } catch (e) { console.error('保存配置失败:', e) }
     setSaving(false)
   }
+
+  const handleTestAI = async (vision: boolean) => {
+    const setter = vision ? setVisionTest : setTextTest
+    setter({ status: 'testing', message: '正在测试连接...' })
+    try {
+      const result = await TestAIConnection(JSON.stringify({
+        aiType: vision ? visionAiType : aiType,
+        aiUrl: vision ? visionAiUrl : aiUrl,
+        model: vision ? visionAiModel : aiModel,
+        apiKey: vision ? visionAiApiKey : aiApiKey,
+        vision,
+      }))
+      const resp = parseResponse<string>(result)
+      if (resp.code === 200) {
+        setter({ status: 'success', message: resp.data ? `${resp.message}：${resp.data}` : resp.message })
+      } else {
+        setter({ status: 'error', message: resp.message || '连接失败' })
+      }
+    } catch (e: any) {
+      setter({ status: 'error', message: '连接测试失败: ' + (e?.message || e) })
+    }
+  }
+
+  const testBadge = (state: { status: string; message: string }, onTest: () => void, testing: boolean) => (
+    <div className="flex items-center gap-2">
+      {state.status !== 'idle' && state.status !== 'testing' && (
+        <span className={cn('text-xs flex items-center gap-1', state.status === 'success' ? 'text-emerald-400' : 'text-red-400')}>
+          {state.status === 'success' ? <CheckCircle2 size={13} /> : <XCircle size={13} />}
+          <span className="max-w-[260px] truncate" title={state.message}>{state.message}</span>
+        </span>
+      )}
+      <button
+        onClick={onTest}
+        disabled={testing}
+        className={cn('btn-secondary text-xs flex items-center gap-1.5 px-3 py-1.5', testing && 'opacity-60 cursor-not-allowed')}
+      >
+        {testing ? <Loader2 size={13} className="animate-spin" /> : <Server size={13} />}
+        {testing ? '测试中...' : '连接测试'}
+      </button>
+    </div>
+  )
 
   const tabs = [
     { id: 'ai', label: 'AI答题配置', icon: Brain },
@@ -113,10 +159,13 @@ const SettingsPage: React.FC = () => {
                 </div>
 
                 <div className="p-4 rounded-lg bg-dark-800/30 border border-dark-700/50 space-y-4">
-                  <div className="flex items-center gap-2 mb-2">
+                <div className="flex items-center justify-between gap-3 mb-2 flex-wrap">
+                  <div className="flex items-center gap-2">
                     <FileText size={16} className="text-blue-400" />
                     <h4 className="text-sm font-semibold text-dark-200">纯文本模型（必填）</h4>
                   </div>
+                  {testBadge(textTest, () => handleTestAI(false), textTest.status === 'testing')}
+                </div>
                   <p className="text-xs text-dark-500 -mt-2 ml-6">用于处理纯文字题目，如选择题、判断题等</p>
                   <div>
                     <label className="text-xs font-medium text-dark-300 mb-1.5 block">AI平台类型</label>
@@ -126,8 +175,8 @@ const SettingsPage: React.FC = () => {
                   </div>
                   <div>
                     <label className="text-xs font-medium text-dark-300 mb-1.5 block">AI API地址</label>
-                    <input type="text" value={aiUrl} onChange={e => setAiUrl(e.target.value)} placeholder="自定义API地址（选填）" className="input-field" />
-                    <p className="text-xs text-dark-500 mt-1">仅在使用"其他"或自定义URL时填写</p>
+                    <input type="text" value={aiUrl} onChange={e => setAiUrl(e.target.value)} placeholder="https://open.bigmodel.cn/api/paas/v4/chat/completions" className="input-field" />
+                    <p className="text-xs text-dark-500 mt-1">OpenAI 类型会使用此地址；第三方兼容接口请填写完整的 /chat/completions 地址</p>
                   </div>
                   <div>
                     <label className="text-xs font-medium text-dark-300 mb-1.5 block">模型名称</label>
@@ -135,15 +184,25 @@ const SettingsPage: React.FC = () => {
                   </div>
                   <div>
                     <label className="text-xs font-medium text-dark-300 mb-1.5 block">API密钥</label>
-                    <input type="password" value={aiApiKey} onChange={e => setAiApiKey(e.target.value)} placeholder="请输入API KEY" className="input-field" />
+                    <div className="relative">
+                      <input type={showAiKey ? 'text' : 'password'} value={aiApiKey} onChange={e => setAiApiKey(e.target.value)} placeholder="请输入API KEY" className="input-field pr-10" />
+                      <button type="button" onClick={() => setShowAiKey(!showAiKey)}
+                        className="absolute right-3 top-1/2 -translate-y-1/2 text-dark-400 hover:text-dark-200"
+                        title={showAiKey ? '隐藏密钥' : '显示密钥'}>
+                        {showAiKey ? <EyeOff size={16} /> : <Eye size={16} />}
+                      </button>
+                    </div>
                     <p className="text-xs text-dark-500 mt-1">密钥将保存在本地配置文件中</p>
                   </div>
                 </div>
 
                 <div className="p-4 rounded-lg bg-dark-800/30 border border-dark-700/50 space-y-4">
-                  <div className="flex items-center gap-2 mb-2">
-                    <Eye size={16} className="text-purple-400" />
-                    <h4 className="text-sm font-semibold text-dark-200">识图模型（选填）</h4>
+                  <div className="flex items-center justify-between gap-3 mb-2 flex-wrap">
+                    <div className="flex items-center gap-2">
+                      <Eye size={16} className="text-purple-400" />
+                      <h4 className="text-sm font-semibold text-dark-200">识图模型（选填）</h4>
+                    </div>
+                    {testBadge(visionTest, () => handleTestAI(true), visionTest.status === 'testing')}
                   </div>
                   <p className="text-xs text-dark-500 -mt-2 ml-6">用于处理含图片的题目，如数学公式图、图表题等。若未配置，含图片的题目将降级使用纯文本模型</p>
                   <div>
@@ -155,7 +214,8 @@ const SettingsPage: React.FC = () => {
                   </div>
                   <div>
                     <label className="text-xs font-medium text-dark-300 mb-1.5 block">AI API地址</label>
-                    <input type="text" value={visionAiUrl} onChange={e => setVisionAiUrl(e.target.value)} placeholder="自定义API地址（选填）" className="input-field" />
+                    <input type="text" value={visionAiUrl} onChange={e => setVisionAiUrl(e.target.value)} placeholder="https://open.bigmodel.cn/api/paas/v4/chat/completions" className="input-field" />
+                    <p className="text-xs text-dark-500 mt-1">OpenAI 类型会使用此地址；第三方兼容接口请填写完整的 /chat/completions 地址</p>
                   </div>
                   <div>
                     <label className="text-xs font-medium text-dark-300 mb-1.5 block">模型名称</label>
@@ -164,7 +224,14 @@ const SettingsPage: React.FC = () => {
                   </div>
                   <div>
                     <label className="text-xs font-medium text-dark-300 mb-1.5 block">API密钥</label>
-                    <input type="password" value={visionAiApiKey} onChange={e => setVisionAiApiKey(e.target.value)} placeholder="请输入API KEY（选填）" className="input-field" />
+                    <div className="relative">
+                      <input type={showVisionKey ? 'text' : 'password'} value={visionAiApiKey} onChange={e => setVisionAiApiKey(e.target.value)} placeholder="请输入API KEY（选填）" className="input-field pr-10" />
+                      <button type="button" onClick={() => setShowVisionKey(!showVisionKey)}
+                        className="absolute right-3 top-1/2 -translate-y-1/2 text-dark-400 hover:text-dark-200"
+                        title={showVisionKey ? '隐藏密钥' : '显示密钥'}>
+                        {showVisionKey ? <EyeOff size={16} /> : <Eye size={16} />}
+                      </button>
+                    </div>
                     <p className="text-xs text-dark-500 mt-1">可与纯文本模型使用同一密钥（若平台相同）</p>
                   </div>
                 </div>

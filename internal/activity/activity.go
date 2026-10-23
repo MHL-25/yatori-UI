@@ -3,6 +3,7 @@ package activity
 import (
 	"encoding/json"
 	"fmt"
+	"html"
 	"math/rand"
 	"net/http"
 	"regexp"
@@ -42,6 +43,8 @@ import (
 	"github.com/yatori-dev/yatori-go-core/models/ctype"
 	"github.com/yatori-dev/yatori-go-core/que-core/aiq"
 	"github.com/yatori-dev/yatori-go-core/que-core/external"
+	"github.com/yatori-dev/yatori-go-core/que-core/qentity"
+	"github.com/yatori-dev/yatori-go-core/que-core/qtype"
 	"github.com/yatori-dev/yatori-go-core/utils"
 	"github.com/yatori-dev/yatori-go-core/utils/qutils"
 )
@@ -155,7 +158,7 @@ func BuildActivity(userPO entity.UserPO, setting config.Setting) Activity {
 		return nil
 	}
 
-	base := UserActivityBase{
+	base := &UserActivityBase{
 		Uid:     userPO.Uid,
 		User:    user,
 		Setting: setting,
@@ -190,7 +193,7 @@ func BuildActivity(userPO entity.UserPO, setting config.Setting) Activity {
 // ==================== XUEXITONG ====================
 
 type XXTActivity struct {
-	UserActivityBase
+	*UserActivityBase
 }
 
 func (a *XXTActivity) Login() error {
@@ -404,6 +407,10 @@ func (a *XXTActivity) courseStudyWithScan(courseItem *xuexitong.XueXiTCourse, sc
 	monitor.GlobalEventBus.UpdateProgress(a.Uid, 0, "学习: "+courseItem.CourseName)
 
 	a.chapterStudy(setting, cache, courseItem, scan)
+	if courseItem.JobRate >= 100 || courseItem.State == 1 {
+		monitor.GlobalEventBus.AddLog(a.Uid, "⏭️ 课程已完成，跳过互动测验及收尾任务: "+courseItem.CourseName)
+		return true
+	}
 	a.quizStudy(setting, cache, courseItem)
 	a.extendReadStudy(setting, cache, courseItem)
 	a.discussionStudy(setting, cache, courseItem)
@@ -570,11 +577,28 @@ func (a *XXTActivity) quizStudy(setting config.Setting, cache *xuexitongApi.XueX
 	if len(plan) == 0 {
 		return
 	}
+	pending := make([]xuexitong.QuizPlanItem, 0, len(plan))
+	for _, item := range plan {
+		if item.QuestionCount > 0 && item.FinishQuestionCount >= item.QuestionCount {
+			continue
+		}
+		pending = append(pending, item)
+	}
+	plan = pending
+	if len(plan) == 0 {
+		monitor.GlobalEventBus.AddLog(a.Uid, "⏭️ [ "+courseItem.CourseName+" ] 互动测验已完成，跳过")
+		return
+	}
 	monitor.GlobalEventBus.AddLog(a.Uid, fmt.Sprintf("🎯 [%s] 互动测验待完成视频 %d 个", courseItem.CourseName, len(plan)))
 
 	answered, failed := 0, 0
+	emptyStreak := 0
 	for _, item := range plan {
 		if !a.IsRunning() {
+			return
+		}
+		if emptyStreak >= 3 {
+			monitor.GlobalEventBus.AddLog(a.Uid, "⚠️ 连续 3 个视频未获得有效答案，答题源可能未配置或无返回，已跳过本课程互动测验")
 			return
 		}
 		card, err := cache.FetchChapterCords2Raw(strconv.Itoa(key), courseItem.CourseID, strconv.Itoa(item.KnowledgeID), strconv.Itoa(courseItem.Cpi), 2, nil)
@@ -600,9 +624,11 @@ func (a *XXTActivity) quizStudy(setting config.Setting, cache *xuexitongApi.XueX
 			answer, err := a.solveQuiz(setting, cache, courseItem, quiz, key)
 			if err != nil {
 				failed++
+				emptyStreak++
 				monitor.GlobalEventBus.AddLog(a.Uid, "⚠️ 弹题作答失败: "+err.Error())
 				continue
 			}
+			emptyStreak = 0
 			resp, err := cache.SubmitQuizAnswerApi(key, courseItem.Cpi, objectID, quiz.ResourceID, quiz.MemberInfo, answer, 1, nil)
 			if err != nil {
 				// 会话降级：重登后重试一次
@@ -632,12 +658,36 @@ func (a *XXTActivity) solveQuiz(setting config.Setting, cache *xuexitongApi.XueX
 	courseItem *xuexitong.XueXiTCourse, quiz xuexitong.QuizItem, classID int) (string, error) {
 
 	prompt := xuexitong.BuildQuizPrompt(quiz)
+
+	// 弹题含图片时：优先识图模型，失败后本地 OCR，最后才走文本 AI
+	if mediaQuestion, hasMedia := buildQuizMediaQuestion(quiz); hasMedia {
+		xuexitongApi.PrepareQuestionImages(cache, &mediaQuestion)
+		if setting.VisionAiSetting.APIKEY != "" && setting.VisionAiSetting.AiUrl != "" {
+			collector := &quizAnswerCollector{}
+			err := xuexitongApi.AnswerQuestionWithVision(cache, mediaQuestion, collector,
+				setting.VisionAiSetting.AiUrl, setting.VisionAiSetting.Model,
+				setting.VisionAiSetting.AiType, setting.VisionAiSetting.APIKEY)
+			if err == nil {
+				if ans, e := xuexitong.NormalizeQuizAnswerForItem(strings.Join(collector.answers, ","), quiz); e == nil {
+					return ans, nil
+				}
+			} else {
+				monitor.GlobalEventBus.AddLog(a.Uid, "⚠️ 弹题识图失败，尝试本地OCR: "+err.Error())
+			}
+		}
+		if ocrText := utils.OCRQuestionImages(mediaQuestion); ocrText != "" {
+			prompt += "\n[图片OCR识别内容]\n" + ocrText
+		}
+	}
+
 	messages := aiq.AIChatMessages{Messages: []aiq.Message{aiq.NewTextMessage("user", prompt)}}
+	lastReply := ""
 
 	if setting.AiSetting.APIKEY != "" && setting.AiSetting.AiUrl != "" {
 		reply, err := aiq.AggregationAIApi(setting.AiSetting.AiUrl, setting.AiSetting.Model, setting.AiSetting.AiType, messages, setting.AiSetting.APIKEY)
 		if err == nil {
-			if ans, e := xuexitong.NormalizeQuizAnswer(reply); e == nil {
+			lastReply = reply
+			if ans, e := xuexitong.NormalizeQuizAnswerForItem(reply, quiz); e == nil {
 				return ans, nil
 			}
 		}
@@ -646,7 +696,106 @@ func (a *XXTActivity) solveQuiz(setting config.Setting, cache *xuexitongApi.XueX
 	if err != nil {
 		return "", err
 	}
-	return xuexitong.NormalizeQuizAnswer(reply)
+	lastReply = reply
+	if ans, e := xuexitong.NormalizeQuizAnswerForItem(reply, quiz); e == nil {
+		return ans, nil
+	}
+	return "", fmt.Errorf("无法解析答案（AI返回: %s）", truncateQuizText(lastReply, 80))
+}
+
+// quizAnswerCollector 用于接收识图模型返回的答案
+type quizAnswerCollector struct {
+	answers []string
+}
+
+func (c *quizAnswerCollector) SetAnswers(answers []string) {
+	c.answers = answers
+}
+
+var (
+	quizHTMLTagPattern = regexp.MustCompile(`(?i)<[^>]+>`)
+	quizImgSrcPattern  = regexp.MustCompile(`(?i)<img[^>]+src\s*=\s*["']([^"']+)["']`)
+)
+
+// buildQuizMediaQuestion 把弹题转成标准题目并提取图片，供识图/OCR链路使用
+func buildQuizMediaQuestion(quiz xuexitong.QuizItem) (qentity.Question, bool) {
+	q := qentity.Question{
+		Type:    quizStandardType(quiz),
+		Content: stripQuizHTML(quiz.Description),
+		Options: qentity.StringArray{},
+	}
+	for _, opt := range quiz.RawOptions {
+		q.Options = append(q.Options, stripQuizHTML(opt))
+	}
+	for _, match := range quizImgSrcPattern.FindAllStringSubmatch(quiz.Description, -1) {
+		q.ContentImages = append(q.ContentImages, qentity.QuestionImage{Url: html.UnescapeString(match[1])})
+	}
+	for i, raw := range quiz.RawOptions {
+		letter := string(rune('A' + i))
+		urls := make([]string, 0)
+		for _, match := range quizImgSrcPattern.FindAllStringSubmatch(raw, -1) {
+			urls = append(urls, html.UnescapeString(match[1]))
+		}
+		if i < len(quiz.Options) {
+			for _, key := range []string{"image", "img", "picture", "imageUrl", "url"} {
+				if value, ok := quiz.Options[i][key].(string); ok && looksLikeImageURL(value) {
+					urls = append(urls, value)
+				}
+			}
+		}
+		for _, url := range urls {
+			if q.OptionImages == nil {
+				q.OptionImages = make(map[string][]qentity.QuestionImage)
+			}
+			q.OptionImages[letter] = append(q.OptionImages[letter], qentity.QuestionImage{Url: url})
+		}
+	}
+	return q, q.HasImages()
+}
+
+func stripQuizHTML(s string) string {
+	s = quizHTMLTagPattern.ReplaceAllString(s, " ")
+	return strings.TrimSpace(html.UnescapeString(s))
+}
+
+func looksLikeImageURL(url string) bool {
+	lower := strings.ToLower(url)
+	if !strings.HasPrefix(lower, "http") {
+		return false
+	}
+	for _, ext := range []string{".png", ".jpg", ".jpeg", ".gif", ".webp", ".bmp"} {
+		if strings.Contains(lower, ext) {
+			return true
+		}
+	}
+	return strings.Contains(lower, "image")
+}
+
+func quizStandardType(quiz xuexitong.QuizItem) string {
+	qt := strings.ToLower(quiz.QuestionType)
+	if strings.Contains(quiz.QuestionType, "多选") || strings.Contains(qt, "multiple") {
+		return qtype.MultipleChoice.String()
+	}
+	if strings.Contains(quiz.QuestionType, "判断") || strings.Contains(qt, "judge") {
+		return qtype.TrueOrFalse.String()
+	}
+	if len(quiz.RawOptions) == 2 {
+		a := strings.TrimSpace(quiz.RawOptions[0])
+		b := strings.TrimSpace(quiz.RawOptions[1])
+		if (a == "对" && b == "错") || (a == "正确" && b == "错误") || (a == "是" && b == "否") {
+			return qtype.TrueOrFalse.String()
+		}
+	}
+	return qtype.SingleChoice.String()
+}
+
+func truncateQuizText(s string, max int) string {
+	s = strings.TrimSpace(s)
+	r := []rune(s)
+	if len(r) <= max {
+		return s
+	}
+	return string(r[:max]) + "..."
 }
 
 func min(a, b int) int {
@@ -979,7 +1128,8 @@ func (a *XXTActivity) nodeRun(setting config.Setting, cache *xuexitongApi.XueXiT
 			}
 			if len(questionAction.Short) == 0 && len(questionAction.Choice) == 0 &&
 				len(questionAction.Judge) == 0 && len(questionAction.Fill) == 0 &&
-				len(questionAction.TermExplanation) == 0 && len(questionAction.Essay) == 0 {
+				len(questionAction.TermExplanation) == 0 && len(questionAction.Essay) == 0 &&
+				len(questionAction.Matching) == 0 && len(questionAction.Other) == 0 {
 				monitor.GlobalEventBus.AddLog(a.Uid, "⏭️ 作业无题目，跳过: "+questionAction.Title)
 				continue
 			}
@@ -1400,6 +1550,67 @@ func (a *XXTActivity) writeCourseWorkAndExam(setting config.Setting, cache *xuex
 	}
 }
 
+// answerChapterQuestionWithMedia 章节测验答题：有图时优先识图，失败后尝试本地 OCR，最后回退纯文本
+func (a *XXTActivity) answerChapterQuestionWithMedia(setting config.Setting, cache *xuexitongApi.XueXiTUserCache,
+	setter xuexitongApi.AnswerSetter, standard qentity.Question, textPrompt aiq.AIChatMessages,
+	useXXTAI bool, classId, courseId, cpi string) {
+	if standard.Type == qtype.QueOther.String() {
+		standard.Type = qtype.ShortAnswer.String()
+	}
+	requestAnswer := func(prompt aiq.AIChatMessages) (string, error) {
+		if useXXTAI {
+			return cache.XueXiTongAIAggregation(classId, courseId, cpi, prompt)
+		}
+		return aiq.AggregationAIApi(setting.AiSetting.AiUrl, setting.AiSetting.Model,
+			setting.AiSetting.AiType, prompt, setting.AiSetting.APIKEY)
+	}
+	parseAnswers := func(reply string) []string {
+		return aiq.ParseQuestionAnswers(standard, reply)
+	}
+	fallbackAnswers := func() []string {
+		// 填空题宁可留空，也不能把说明文字或单个 "A" 塞进多个空位
+		if standard.Type == qtype.FillInTheBlank.String() {
+			return make([]string, len(standard.Options))
+		}
+		return []string{"A"}
+	}
+	if standard.HasImages() {
+		xuexitongApi.PrepareQuestionImages(cache, &standard)
+		if setting.VisionAiSetting.APIKEY != "" && setting.VisionAiSetting.AiUrl != "" {
+			err := xuexitongApi.AnswerQuestionWithVision(cache, standard, setter,
+				setting.VisionAiSetting.AiUrl, setting.VisionAiSetting.Model,
+				setting.VisionAiSetting.AiType, setting.VisionAiSetting.APIKEY)
+			if err == nil {
+				return
+			}
+			monitor.GlobalEventBus.AddLog(a.Uid, "⚠️ 识图模型作答失败，尝试本地OCR: "+err.Error())
+		}
+		if ocrText := utils.OCRQuestionImages(standard); ocrText != "" {
+			standard.Content += "\n[图片OCR识别内容]\n" + ocrText
+			ocrPrompt := aiq.BuildAiQuestionMessage(standard)
+			reply, err := requestAnswer(ocrPrompt)
+			if err == nil {
+				if answers := parseAnswers(reply); len(answers) > 0 {
+					setter.SetAnswers(answers)
+					return
+				}
+			}
+			monitor.GlobalEventBus.AddLog(a.Uid, "⚠️ 本地OCR兜底答题失败，回退纯文本")
+		}
+	}
+	reply, err := requestAnswer(textPrompt)
+	if err != nil {
+		monitor.GlobalEventBus.AddLog(a.Uid, "⚠️ AI作答失败: "+err.Error())
+		setter.SetAnswers(fallbackAnswers())
+		return
+	}
+	answers := parseAnswers(reply)
+	if len(answers) == 0 {
+		answers = fallbackAnswers()
+	}
+	setter.SetAnswers(answers)
+}
+
 func (a *XXTActivity) chapterTestAction(cache *xuexitongApi.XueXiTUserCache, questionAction xuexitongApi.Question, courseItem *xuexitong.XueXiTCourse, knowledgeItem xuexitong.KnowledgeItem) {
 	user := a.User
 	setting := a.Setting
@@ -1414,12 +1625,12 @@ func (a *XXTActivity) chapterTestAction(cache *xuexitongApi.XueXiTUserCache, que
 		switch user.CoursesCustom.AutoExam {
 		case 1:
 			message := xuexitong.AIProblemMessage(questionAction.Title, q.Type.String(), xuexitongApi.ExamTurn{XueXChoiceQue: *q})
-			q.AnswerAIGet(cache.UserID, setting.AiSetting.AiUrl, setting.AiSetting.Model, setting.AiSetting.AiType, message, setting.AiSetting.APIKEY)
+			a.answerChapterQuestionWithMedia(setting, cache, q, q.TurnStandardQuestion(), message, false, "", "", "")
 		case 2:
 			q.AnswerExternalGet(setting.ApiQueSetting.Url)
 		case 3:
 			message := xuexitong.AIProblemMessage(questionAction.Title, q.Type.String(), xuexitongApi.ExamTurn{XueXChoiceQue: *q})
-			q.AnswerXXTAIGet(cache, questionAction.ClassId, questionAction.CourseId, questionAction.Cpi, message)
+			a.answerChapterQuestionWithMedia(setting, cache, q, q.TurnStandardQuestion(), message, true, questionAction.ClassId, questionAction.CourseId, questionAction.Cpi)
 		}
 		time.Sleep(time.Duration(rand.Intn(stopEnd-stopStart)+stopStart) * time.Second)
 	}
@@ -1428,12 +1639,12 @@ func (a *XXTActivity) chapterTestAction(cache *xuexitongApi.XueXiTUserCache, que
 		switch user.CoursesCustom.AutoExam {
 		case 1:
 			message := xuexitong.AIProblemMessage(questionAction.Title, q.Type.String(), xuexitongApi.ExamTurn{XueXJudgeQue: *q})
-			q.AnswerAIGet(cache.UserID, setting.AiSetting.AiUrl, setting.AiSetting.Model, setting.AiSetting.AiType, message, setting.AiSetting.APIKEY)
+			a.answerChapterQuestionWithMedia(setting, cache, q, q.TurnStandardQuestion(), message, false, "", "", "")
 		case 2:
 			q.AnswerExternalGet(setting.ApiQueSetting.Url)
 		case 3:
 			message := xuexitong.AIProblemMessage(questionAction.Title, q.Type.String(), xuexitongApi.ExamTurn{XueXJudgeQue: *q})
-			q.AnswerXXTAIGet(cache, questionAction.ClassId, questionAction.CourseId, questionAction.Cpi, message)
+			a.answerChapterQuestionWithMedia(setting, cache, q, q.TurnStandardQuestion(), message, true, questionAction.ClassId, questionAction.CourseId, questionAction.Cpi)
 		}
 		time.Sleep(time.Duration(rand.Intn(stopEnd-stopStart)+stopStart) * time.Second)
 	}
@@ -1442,12 +1653,12 @@ func (a *XXTActivity) chapterTestAction(cache *xuexitongApi.XueXiTUserCache, que
 		switch user.CoursesCustom.AutoExam {
 		case 1:
 			message := xuexitong.AIProblemMessage(questionAction.Title, q.Type.String(), xuexitongApi.ExamTurn{XueXFillQue: *q})
-			q.AnswerAIGet(cache.UserID, setting.AiSetting.AiUrl, setting.AiSetting.Model, setting.AiSetting.AiType, message, setting.AiSetting.APIKEY)
+			a.answerChapterQuestionWithMedia(setting, cache, q, q.TurnStandardQuestion(), message, false, "", "", "")
 		case 2:
 			q.AnswerExternalGet(setting.ApiQueSetting.Url)
 		case 3:
 			message := xuexitong.AIProblemMessage(questionAction.Title, q.Type.String(), xuexitongApi.ExamTurn{XueXFillQue: *q})
-			q.AnswerXXTAIGet(cache, questionAction.ClassId, questionAction.CourseId, questionAction.Cpi, message)
+			a.answerChapterQuestionWithMedia(setting, cache, q, q.TurnStandardQuestion(), message, true, questionAction.ClassId, questionAction.CourseId, questionAction.Cpi)
 		}
 		time.Sleep(time.Duration(rand.Intn(stopEnd-stopStart)+stopStart) * time.Second)
 	}
@@ -1456,12 +1667,12 @@ func (a *XXTActivity) chapterTestAction(cache *xuexitongApi.XueXiTUserCache, que
 		switch user.CoursesCustom.AutoExam {
 		case 1:
 			message := xuexitong.AIProblemMessage(questionAction.Title, q.Type.String(), xuexitongApi.ExamTurn{XueXShortQue: *q})
-			q.AnswerAIGet(cache.UserID, setting.AiSetting.AiUrl, setting.AiSetting.Model, setting.AiSetting.AiType, message, setting.AiSetting.APIKEY)
+			a.answerChapterQuestionWithMedia(setting, cache, q, q.TurnStandardQuestion(), message, false, "", "", "")
 		case 2:
 			q.AnswerExternalGet(setting.ApiQueSetting.Url)
 		case 3:
 			message := xuexitong.AIProblemMessage(questionAction.Title, q.Type.String(), xuexitongApi.ExamTurn{XueXShortQue: *q})
-			q.AnswerXXTAIGet(cache, questionAction.ClassId, questionAction.CourseId, questionAction.Cpi, message)
+			a.answerChapterQuestionWithMedia(setting, cache, q, q.TurnStandardQuestion(), message, true, questionAction.ClassId, questionAction.CourseId, questionAction.Cpi)
 		}
 		time.Sleep(time.Duration(rand.Intn(stopEnd-stopStart)+stopStart) * time.Second)
 	}
@@ -1470,12 +1681,12 @@ func (a *XXTActivity) chapterTestAction(cache *xuexitongApi.XueXiTUserCache, que
 		switch user.CoursesCustom.AutoExam {
 		case 1:
 			message := xuexitong.AIProblemMessage(questionAction.Title, q.Type.String(), xuexitongApi.ExamTurn{XueXTermExplanationQue: *q})
-			q.AnswerAIGet(cache.UserID, setting.AiSetting.AiUrl, setting.AiSetting.Model, setting.AiSetting.AiType, message, setting.AiSetting.APIKEY)
+			a.answerChapterQuestionWithMedia(setting, cache, q, q.TurnStandardQuestion(), message, false, "", "", "")
 		case 2:
 			q.AnswerExternalGet(setting.ApiQueSetting.Url)
 		case 3:
 			message := xuexitong.AIProblemMessage(questionAction.Title, q.Type.String(), xuexitongApi.ExamTurn{XueXTermExplanationQue: *q})
-			q.AnswerXXTAIGet(cache, questionAction.ClassId, questionAction.CourseId, questionAction.Cpi, message)
+			a.answerChapterQuestionWithMedia(setting, cache, q, q.TurnStandardQuestion(), message, true, questionAction.ClassId, questionAction.CourseId, questionAction.Cpi)
 		}
 		time.Sleep(time.Duration(rand.Intn(stopEnd-stopStart)+stopStart) * time.Second)
 	}
@@ -1484,12 +1695,12 @@ func (a *XXTActivity) chapterTestAction(cache *xuexitongApi.XueXiTUserCache, que
 		switch user.CoursesCustom.AutoExam {
 		case 1:
 			message := xuexitong.AIProblemMessage(questionAction.Title, q.Type.String(), xuexitongApi.ExamTurn{XueXEssayQue: *q})
-			q.AnswerAIGet(cache.UserID, setting.AiSetting.AiUrl, setting.AiSetting.Model, setting.AiSetting.AiType, message, setting.AiSetting.APIKEY)
+			a.answerChapterQuestionWithMedia(setting, cache, q, q.TurnStandardQuestion(), message, false, "", "", "")
 		case 2:
 			q.AnswerExternalGet(setting.ApiQueSetting.Url)
 		case 3:
 			message := xuexitong.AIProblemMessage(questionAction.Title, q.Type.String(), xuexitongApi.ExamTurn{XueXEssayQue: *q})
-			q.AnswerXXTAIGet(cache, questionAction.ClassId, questionAction.CourseId, questionAction.Cpi, message)
+			a.answerChapterQuestionWithMedia(setting, cache, q, q.TurnStandardQuestion(), message, true, questionAction.ClassId, questionAction.CourseId, questionAction.Cpi)
 		}
 		time.Sleep(time.Duration(rand.Intn(stopEnd-stopStart)+stopStart) * time.Second)
 	}
@@ -1498,12 +1709,29 @@ func (a *XXTActivity) chapterTestAction(cache *xuexitongApi.XueXiTUserCache, que
 		switch user.CoursesCustom.AutoExam {
 		case 1:
 			message := xuexitong.AIProblemMessage(questionAction.Title, q.Type.String(), xuexitongApi.ExamTurn{XueXMatchingQue: *q})
-			q.AnswerAIGet(cache.UserID, setting.AiSetting.AiUrl, setting.AiSetting.Model, setting.AiSetting.AiType, message, setting.AiSetting.APIKEY)
+			a.answerChapterQuestionWithMedia(setting, cache, q, q.TurnStandardQuestion(), message, false, "", "", "")
 		case 2:
 			q.AnswerExternalGet(setting.ApiQueSetting.Url)
 		case 3:
 			message := xuexitong.AIProblemMessage(questionAction.Title, q.Type.String(), xuexitongApi.ExamTurn{XueXMatchingQue: *q})
-			q.AnswerXXTAIGet(cache, questionAction.ClassId, questionAction.CourseId, questionAction.Cpi, message)
+			a.answerChapterQuestionWithMedia(setting, cache, q, q.TurnStandardQuestion(), message, true, questionAction.ClassId, questionAction.CourseId, questionAction.Cpi)
+		}
+		time.Sleep(time.Duration(rand.Intn(stopEnd-stopStart)+stopStart) * time.Second)
+	}
+
+	for i := range questionAction.Other {
+		q := &questionAction.Other[i]
+		std := q.TurnStandardQuestion()
+		std.Type = qtype.ShortAnswer.String()
+		switch user.CoursesCustom.AutoExam {
+		case 1:
+			message := aiq.BuildAiQuestionMessage(std)
+			a.answerChapterQuestionWithMedia(setting, cache, q, std, message, false, "", "", "")
+		case 2:
+			q.AnswerExternalGet(setting.ApiQueSetting.Url)
+		case 3:
+			message := aiq.BuildAiQuestionMessage(std)
+			a.answerChapterQuestionWithMedia(setting, cache, q, std, message, true, questionAction.ClassId, questionAction.CourseId, questionAction.Cpi)
 		}
 		time.Sleep(time.Duration(rand.Intn(stopEnd-stopStart)+stopStart) * time.Second)
 	}
@@ -1540,7 +1768,10 @@ func (a *XXTActivity) workAction(cache *xuexitongApi.XueXiTUserCache, work xuexi
 		} else if user.CoursesCustom.AutoExam == 2 {
 			question.WriteQuestionForExternalAction(setting.ApiQueSetting.Url)
 		} else if user.CoursesCustom.AutoExam == 3 {
-			question.WriteQuestionForXXTAIAction(cache, question.ClassId, question.CourseId, question.Cpi)
+			if err := question.WriteQuestionForVisionOrXXTAIAction(cache, setting.VisionAiSetting.AiUrl, setting.VisionAiSetting.Model, setting.VisionAiSetting.AiType, setting.VisionAiSetting.APIKEY, question.ClassId, question.CourseId, question.Cpi); err != nil {
+				monitor.GlobalEventBus.AddLog(a.Uid, fmt.Sprintf("⚠️ 内置AI作答失败，跳过 Q%d: %s", i+1, err.Error()))
+				continue
+			}
 		}
 		submitResult, err3 := question.SubmitWorkAnswerAction(cache, (user.CoursesCustom.ExamAutoSubmit == 1 || user.CoursesCustom.ExamAutoSubmit == 2) && work.QuestionTotal == i+1)
 		if err3 != nil {
@@ -1569,7 +1800,10 @@ func (a *XXTActivity) examAction(cache *xuexitongApi.XueXiTUserCache, exam xuexi
 		} else if user.CoursesCustom.AutoExam == 2 {
 			question.WriteQuestionForExternalAction(setting.ApiQueSetting.Url)
 		} else if user.CoursesCustom.AutoExam == 3 {
-			question.WriteQuestionForXXTAIAction(cache, question.ClassId, question.CourseId, question.Cpi)
+			if err := question.WriteQuestionForVisionOrXXTAIAction(cache, setting.VisionAiSetting.AiUrl, setting.VisionAiSetting.Model, setting.VisionAiSetting.AiType, setting.VisionAiSetting.APIKEY, question.ClassId, question.CourseId, question.Cpi); err != nil {
+				monitor.GlobalEventBus.AddLog(a.Uid, fmt.Sprintf("⚠️ 内置AI作答失败，跳过 Q%d: %s", i+1, err.Error()))
+				continue
+			}
 		}
 		isSubmit := false
 		if (user.CoursesCustom.ExamAutoSubmit == 1 || user.CoursesCustom.ExamAutoSubmit == 2) && exam.QuestionTotal == i+1 {
@@ -1651,7 +1885,7 @@ func checkAnswerIsAvoid(choices []xuexitongApi.ChoiceQue, judges []xuexitongApi.
 // ==================== YINGHUA ====================
 
 type YingHuaActivity struct {
-	UserActivityBase
+	*UserActivityBase
 }
 
 func (a *YingHuaActivity) Login() error {
@@ -1659,7 +1893,12 @@ func (a *YingHuaActivity) Login() error {
 	if a.User.IsProxy == 1 {
 		cache.IpProxySW = true
 	}
-	err1 := yinghua.YingHuaLoginAction(cache)
+	var err1 error
+	if yinghua.IsYingHuaCookieOrToken(a.User.Password) {
+		err1 = yinghua.YingHuaCookieLoginAction(cache)
+	} else {
+		err1 = yinghua.YingHuaLoginAction(cache)
+	}
 	if err1 != nil {
 		monitor.GlobalEventBus.SetError(a.Uid, "❌ 登录失败: "+err1.Error())
 		return err1
@@ -1968,7 +2207,7 @@ func (a *YingHuaActivity) examAction(cache *yinghuaApi.YingHuaUserCache, course 
 
 // ==================== ENAEA ====================
 
-type EnaeaActivity struct{ UserActivityBase }
+type EnaeaActivity struct{ *UserActivityBase }
 
 func (a *EnaeaActivity) Login() error {
 	cache := &enaeaApi.EnaeaUserCache{Account: a.User.Account, Password: a.User.Password}
@@ -2155,7 +2394,7 @@ func (a *EnaeaActivity) videoAction(cache *enaeaApi.EnaeaUserCache, node *enaea.
 
 // ==================== CQIE ====================
 
-type CqieActivity struct{ UserActivityBase }
+type CqieActivity struct{ *UserActivityBase }
 
 func (a *CqieActivity) Login() error {
 	cache := &cqieApi.CqieUserCache{Account: a.User.Account, Password: a.User.Password}
@@ -2323,7 +2562,7 @@ func (a *CqieActivity) videoSpeedAction(cache *cqieApi.CqieUserCache, video *cqi
 
 // ==================== ICVE ====================
 
-type IcveActivity struct{ UserActivityBase }
+type IcveActivity struct{ *UserActivityBase }
 
 func (a *IcveActivity) Login() error {
 	cache := &icveApi.IcveUserCache{Account: a.User.Account, Password: a.User.Password}
@@ -2433,7 +2672,7 @@ func (a *IcveActivity) run() {
 
 // ==================== QSXT ====================
 
-type QsxtActivity struct{ UserActivityBase }
+type QsxtActivity struct{ *UserActivityBase }
 
 func (a *QsxtActivity) Login() error {
 	cache := &qsxtApi.QsxtUserCache{Account: a.User.Account, Password: a.User.Password}
@@ -2626,7 +2865,7 @@ func (a *QsxtActivity) workAction(cache *qsxtApi.QsxtUserCache, course *qingshux
 
 // ==================== WELEARN ====================
 
-type WeLearnActivity struct{ UserActivityBase }
+type WeLearnActivity struct{ *UserActivityBase }
 
 func (a *WeLearnActivity) Login() error {
 	cache := &welearnApi.WeLearnUserCache{Account: a.User.Account, Password: a.User.Password}
@@ -2809,7 +3048,7 @@ func (a *WeLearnActivity) nodeCompleteAction(cache *welearnApi.WeLearnUserCache,
 
 // ==================== KETANGX ====================
 
-type KetangxActivity struct{ UserActivityBase }
+type KetangxActivity struct{ *UserActivityBase }
 
 func (a *KetangxActivity) Login() error {
 	cache := &ketangxApi.KetangxUserCache{Account: a.User.Account, Password: a.User.Password}
@@ -2913,7 +3152,7 @@ func (a *KetangxActivity) run() {
 
 // ==================== HQKJ ====================
 
-type HqkjActivity struct{ UserActivityBase }
+type HqkjActivity struct{ *UserActivityBase }
 
 func (a *HqkjActivity) Login() error {
 	cache := &hqkjApi.HqkjUserCache{PreUrl: a.User.URL, Account: a.User.Account, Password: a.User.Password}

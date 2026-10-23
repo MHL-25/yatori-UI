@@ -43,6 +43,12 @@ const DashboardPage: React.FC = () => {
 
   const runningFromProgress = Object.values(progressMap).filter(p => p.status === 'running').length
   const runningFromAccounts = accounts.filter(a => a.isRunning).length
+  const sortedAccounts = [...accounts].sort((a, b) => {
+    const aRunning = progressMap[a.uid]?.status === 'running' || a.isRunning ? 1 : 0
+    const bRunning = progressMap[b.uid]?.status === 'running' || b.isRunning ? 1 : 0
+    if (aRunning !== bRunning) return bRunning - aRunning
+    return (a.remarkName || a.account || '').localeCompare(b.remarkName || b.account || '', 'zh-CN')
+  })
   const runningCount = Math.max(runningFromProgress, runningFromAccounts)
 
   const completedCount = Object.values(progressMap).filter(p => p.status === 'completed').length
@@ -127,7 +133,7 @@ const DashboardPage: React.FC = () => {
           </div>
         ) : (
           <div className="space-y-3">
-            {accounts.map((account) => {
+            {sortedAccounts.map((account) => {
               const progress = progressMap[account.uid]
               const status = progress?.status || (account.isRunning ? 'running' : 'idle')
               const progressValue = progress?.progress || 0

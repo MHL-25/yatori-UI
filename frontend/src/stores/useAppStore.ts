@@ -441,9 +441,13 @@ export const useAppStore = create<AppStore>((set, get) => ({
   },
 
   updateProgress: (data) => {
-    set((s) => ({
-      progressMap: { ...s.progressMap, [data.uid]: { ...s.progressMap[data.uid], ...data } }
-    }))
+    set((s) => {
+      const prev = s.progressMap[data.uid]
+      const logs = Array.isArray(data.logs) ? data.logs : (prev?.logs || [])
+      return {
+        progressMap: { ...s.progressMap, [data.uid]: { ...prev, ...data, logs } }
+      }
+    })
   },
 
   addLog: (uid: string, log: string) => {

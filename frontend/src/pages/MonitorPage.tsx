@@ -16,7 +16,8 @@ const MonitorCard: React.FC<{
   doneCourses: number
   logs: string[]
   errorMessage?: string
-}> = ({ uid, accountName, platform, platformName, status, progress, currentTask, totalCourses, doneCourses, logs, errorMessage }) => {
+}> = ({ uid, accountName, platform, platformName, status, progress, currentTask, totalCourses, doneCourses, logs: rawLogs, errorMessage }) => {
+  const logs = rawLogs || []
   const [showLogs, setShowLogs] = useState(false)
   const [autoScroll, setAutoScroll] = useState(true)
   const logContainerRef = useRef<HTMLDivElement>(null)

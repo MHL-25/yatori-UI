@@ -1,7 +1,7 @@
 import React, { useState, useEffect } from 'react'
 import { useAppStore } from '../stores/useAppStore'
 import { cn, getPlatformName, getPlatformIcon, PLATFORM_LIST, getStatusLabel, getStatusColor, getProgressColor } from '../utils/helpers'
-import { Plus, Trash2, Edit3, CheckCircle, XCircle, Play, Square, Pause, Search, RefreshCw, Users, Settings, ChevronDown, ChevronUp, Mail, Upload, PlayCircle, CheckSquare, Square as EmptySquare, Loader2 } from 'lucide-react'
+import { Plus, Trash2, Edit3, CheckCircle, XCircle, Play, Square, Pause, Search, RefreshCw, Users, Settings, ChevronDown, ChevronUp, Mail, Upload, PlayCircle, CheckSquare, Square as EmptySquare, Loader2, Eye, EyeOff } from 'lucide-react'
 import { motion, AnimatePresence } from 'framer-motion'
 
 const PLATFORM_VIDEO_MODES: Record<string, { value: number; label: string; desc: string }[]> = {
@@ -138,6 +138,7 @@ const AccountFormFields: React.FC<{
   hideIdentity?: boolean
   courseSourceUid?: string
 }> = ({ form, setForm, showAdvanced, setShowAdvanced, isEdit, hideIdentity, courseSourceUid }) => {
+  const [showPassword, setShowPassword] = useState(false)
   const needUrl = ['YINGHUA', 'CANGHUI', 'HQKJ'].includes(form.accountType)
   const needStudyTime = form.accountType === 'WELEARN'
   const { fetchCourseList, queryCourseList } = useAppStore()
@@ -218,7 +219,14 @@ const AccountFormFields: React.FC<{
           <input type="text" value={form.account} onChange={e => setForm({ ...form, account: e.target.value })} placeholder="请输入账号" className="input-field" />
         </div>
         <div><label className="text-xs font-medium text-dark-300 mb-1 block">密码 / Cookie</label>
-          <input type="password" value={form.password} onChange={e => setForm({ ...form, password: e.target.value })} placeholder="请输入密码" className="input-field" />
+          <div className="relative">
+            <input type={showPassword ? 'text' : 'password'} value={form.password} onChange={e => setForm({ ...form, password: e.target.value })} placeholder="请输入密码或 Cookie" className="input-field pr-10" />
+            <button type="button" onClick={() => setShowPassword(!showPassword)}
+              className="absolute right-3 top-1/2 -translate-y-1/2 text-dark-400 hover:text-dark-200"
+              title={showPassword ? '隐藏密码' : '显示密码'}>
+              {showPassword ? <EyeOff size={16} /> : <Eye size={16} />}
+            </button>
+          </div>
         </div>
       </div>
         </>
@@ -573,6 +581,7 @@ const AddAccountModal: React.FC<{ open: boolean; onClose: () => void }> = ({ ope
   const [showAdvanced, setShowAdvanced] = useState(true)
   const [step, setStep] = useState(0)
   const [direction, setDirection] = useState(1)
+  const [showPassword, setShowPassword] = useState(false)
 
   useEffect(() => {
     if (open) { setForm(defaultForm); setStep(0); setDirection(1) }
@@ -686,15 +695,25 @@ const AddAccountModal: React.FC<{ open: boolean; onClose: () => void }> = ({ ope
                 </div>
                 <div>
                   <label className="text-xs font-medium text-dark-300 mb-1 block">密码 / Cookie</label>
-                  <input type="password" value={form.password} onChange={e => setForm({ ...form, password: e.target.value })}
-                    onKeyDown={e => { if (e.key === 'Enter' && canNext) go(2) }}
-                    placeholder="请输入密码或 Cookie" className="input-field" />
+                  <div className="relative">
+                    <input type={showPassword ? 'text' : 'password'} value={form.password} onChange={e => setForm({ ...form, password: e.target.value })}
+                      onKeyDown={e => { if (e.key === 'Enter' && canNext) go(2) }}
+                      placeholder="请输入密码或 Cookie" className="input-field pr-10" />
+                    <button type="button" onClick={() => setShowPassword(!showPassword)}
+                      className="absolute right-3 top-1/2 -translate-y-1/2 text-dark-400 hover:text-dark-200"
+                      title={showPassword ? '隐藏密码' : '显示密码'}>
+                      {showPassword ? <EyeOff size={16} /> : <Eye size={16} />}
+                    </button>
+                  </div>
                 </div>
                 {['YINGHUA', 'CANGHUI', 'HQKJ'].includes(form.accountType) && (
                   <div>
                     <label className="text-xs font-medium text-dark-300 mb-1 block">平台 URL</label>
                     <input type="text" value={form.url} onChange={e => setForm({ ...form, url: e.target.value })}
                       placeholder="https://example.com" className="input-field" />
+                    {form.accountType === 'YINGHUA' && (
+                      <p className="text-[11px] text-dark-400 mt-1">填写站点根地址即可，如 https://cdcas.suwankj.com；密码栏可直接粘贴浏览器 Cookie（含 token=）。</p>
+                    )}
                   </div>
                 )}
               </motion.div>
@@ -883,7 +902,12 @@ const AccountsPage: React.FC = () => {
     a.account.includes(search) ||
     (a.remarkName && a.remarkName.includes(search)) ||
     getPlatformName(a.accountType).includes(search)
-  )
+  ).sort((a, b) => {
+    const aRunning = progressMap[a.uid]?.status === 'running' || a.isRunning ? 1 : 0
+    const bRunning = progressMap[b.uid]?.status === 'running' || b.isRunning ? 1 : 0
+    if (aRunning !== bRunning) return bRunning - aRunning
+    return (a.remarkName || a.account || '').localeCompare(b.remarkName || b.account || '', 'zh-CN')
+  })
 
   const handleLoginCheck = async (uid: string) => {
     setChecking(uid)

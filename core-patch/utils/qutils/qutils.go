@@ -1,0 +1,122 @@
+package qutils
+
+import (
+	"sort"
+	"strings"
+)
+
+// 计算两个字符串的Levenshtein距离
+func Levenshtein(a, b string) int {
+	m, n := len(a), len(b)
+	dp := make([][]int, m+1)
+	for i := range dp {
+		dp[i] = make([]int, n+1)
+	}
+	for i := 0; i <= m; i++ {
+		dp[i][0] = i
+	}
+	for j := 0; j <= n; j++ {
+		dp[0][j] = j
+	}
+	for i := 1; i <= m; i++ {
+		for j := 1; j <= n; j++ {
+			cost := 0
+			if a[i-1] != b[j-1] {
+				cost = 1
+			}
+			dp[i][j] = min(
+				dp[i-1][j]+1,      // 删除
+				dp[i][j-1]+1,      // 插入
+				dp[i-1][j-1]+cost, // 替换
+			)
+		}
+	}
+	return dp[m][n]
+}
+
+// 相似度评分
+func Similarity(a, b string) float64 {
+	maxLen := float64(max(len(a), len(b)))
+	if maxLen == 0 {
+		return 1.0
+	}
+	return 1.0 - float64(Levenshtein(a, b))/maxLen
+}
+
+func max(a, b int) int {
+	if a > b {
+		return a
+	}
+	return b
+}
+
+type Co struct {
+	Index int
+	Score float64
+}
+
+// 相似度匹配并排序
+func SimilarityArrayAndSort(target string, v []string) []Co {
+	coList := make([]Co, len(v))
+	for i := 0; i < len(v); i++ {
+		coList[i] = Co{Index: i, Score: Similarity(v[i], target)}
+	}
+	sort.Slice(coList, func(i, j int) bool {
+		if coList[i].Score >= coList[j].Score {
+			return true
+		}
+		return false
+	})
+	return coList
+}
+
+// 直接返回对应最大匹配的ABCD
+func SimilarityArraySelect(target string, v []string) string {
+	//AI 已直接返回字母时优先采用，兼容纯图片选项
+	target = strings.TrimSpace(target)
+	if len(target) == 1 {
+		letter := strings.ToUpper(target)
+		if letter >= "A" && letter <= "Z" && int(letter[0]-'A') < len(v) {
+			return letter
+		}
+	}
+	coList := make([]Co, len(v))
+	for i := 0; i < len(v); i++ {
+		coList[i] = Co{Index: i, Score: Similarity(v[i], target)}
+	}
+	var sco = 0.0
+	var index = 0
+	slist := []string{"A", "B", "C", "D", "E", "F", "G", "H", "I", "J", "K", "R", "M", "N", "O", "P", "Q"}
+	for _, co := range coList {
+		if sco < co.Score {
+			sco = co.Score
+			index = co.Index
+		}
+	}
+	return slist[index]
+}
+
+// 直接返回最大匹配的答案文字
+func SimilarityArrayAnswer(target string, v []string) string {
+	//AI 已直接返回字母时保留字母，兼容纯图片选项
+	target = strings.TrimSpace(target)
+	if len(target) == 1 {
+		letter := strings.ToUpper(target)
+		if letter >= "A" && letter <= "Z" && int(letter[0]-'A') < len(v) {
+			return letter
+		}
+	}
+	coList := make([]Co, len(v))
+	for i := 0; i < len(v); i++ {
+		coList[i] = Co{Index: i, Score: Similarity(v[i], target)}
+	}
+	var sco = 0.0
+	var index = 0
+	for _, co := range coList {
+		if sco < co.Score {
+			sco = co.Score
+			index = co.Index
+		}
+	}
+	return v[index]
+}

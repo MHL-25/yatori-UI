@@ -1,14 +1,19 @@
 package main
 
 import (
+	"bytes"
 	"context"
 	_ "embed"
+	"encoding/base64"
 	"encoding/json"
+	"image"
+	"image/png"
 	"log"
 	"math/rand"
 	"os"
 	"path/filepath"
 	"strconv"
+	"strings"
 	"sync"
 	"time"
 	"yatori-UI/internal/activity"
@@ -22,6 +27,8 @@ import (
 	"github.com/fsnotify/fsnotify"
 	systray "github.com/getlantern/systray"
 	"github.com/wailsapp/wails/v2/pkg/runtime"
+	"github.com/yatori-dev/yatori-go-core/models/ctype"
+	"github.com/yatori-dev/yatori-go-core/que-core/aiq"
 	"github.com/yatori-dev/yatori-go-core/utils"
 )
 
@@ -37,7 +44,7 @@ type App struct {
 	launchCount  int
 }
 
-const AppVersion = "1.2.3"
+const AppVersion = "1.2.15"
 
 func NewApp() *App {
 	return &App{notified: make(map[string]time.Time)}
@@ -45,6 +52,92 @@ func NewApp() *App {
 
 func (a *App) GetAppVersion() string {
 	return AppVersion
+}
+
+type aiTestRequest struct {
+	AiType string `json:"aiType"`
+	AiUrl  string `json:"aiUrl"`
+	Model  string `json:"model"`
+	APIKey string `json:"apiKey"`
+	Vision bool   `json:"vision"`
+}
+
+// TestAIConnection 测试文本模型或识图模型的连接
+func (a *App) TestAIConnection(jsonReq string) string {
+	var req aiTestRequest
+	if err := json.Unmarshal([]byte(jsonReq), &req); err != nil {
+		data, _ := json.Marshal(entity.ErrorResponse("参数解析失败: " + err.Error()))
+		return string(data)
+	}
+	if strings.TrimSpace(req.APIKey) == "" {
+		data, _ := json.Marshal(entity.ErrorResponse("请先填写 API 密钥"))
+		return string(data)
+	}
+	if strings.TrimSpace(req.AiType) == "" {
+		data, _ := json.Marshal(entity.ErrorResponse("请先选择 AI 平台类型"))
+		return string(data)
+	}
+	req.APIKey = strings.TrimSpace(req.APIKey)
+	req.AiUrl = strings.TrimSpace(req.AiUrl)
+	req.Model = strings.TrimSpace(req.Model)
+
+	aiType := ctype.AiType(req.AiType)
+	if req.Vision {
+		imageBase64 := buildAITestImage()
+		content := []aiq.MessageContent{
+			{Type: "image_url", ImageUrl: &aiq.ImageURL{URL: "data:image/png;base64," + imageBase64}},
+			{Type: "text", Text: "请用一句话描述这张图片的主色调，只回答一个颜色词。"},
+		}
+		messages := aiq.AIChatMessages{Messages: []aiq.Message{aiq.NewVisualMessage("user", content)}}
+		reply, err := aiq.AggregationVisualAIApi(req.AiUrl, req.Model, aiType, messages, req.APIKey)
+		if err != nil {
+			msg := err.Error()
+			if strings.Contains(msg, "1305") || strings.Contains(msg, "访问量过大") {
+				msg = "模型当前访问量过大（1305），请稍后重试或换用其他视觉模型"
+			}
+			data, _ := json.Marshal(entity.ErrorResponse("识图模型连接失败: " + msg))
+			return string(data)
+		}
+		if strings.TrimSpace(reply) == "" {
+			data, _ := json.Marshal(entity.ErrorResponse("识图模型返回为空，请检查模型名称是否支持视觉输入"))
+			return string(data)
+		}
+		display := strings.Join(aiq.ParseStringArray(reply), "；")
+		if display == "" {
+			display = truncateText(reply, 80)
+		}
+		data, _ := json.Marshal(entity.SuccessResponse("识图模型连接成功", truncateText(display, 80)))
+		return string(data)
+	}
+
+	if err := aiq.AICheck(req.AiUrl, req.Model, req.APIKey, aiType); err != nil {
+		data, _ := json.Marshal(entity.ErrorResponse("文本模型连接失败: " + err.Error()))
+		return string(data)
+	}
+	data, _ := json.Marshal(entity.SuccessResponse("文本模型连接成功", "OK"))
+	return string(data)
+}
+
+func buildAITestImage() string {
+	img := image.NewRGBA(image.Rect(0, 0, 256, 256))
+	for i := 0; i < len(img.Pix); i += 4 {
+		img.Pix[i] = 220
+		img.Pix[i+1] = 30
+		img.Pix[i+2] = 30
+		img.Pix[i+3] = 255
+	}
+	var buf bytes.Buffer
+	_ = png.Encode(&buf, img)
+	return base64.StdEncoding.EncodeToString(buf.Bytes())
+}
+
+func truncateText(s string, max int) string {
+	s = strings.TrimSpace(s)
+	runes := []rune(s)
+	if len(runes) > max {
+		return string(runes[:max]) + "..."
+	}
+	return s
 }
 
 func (a *App) beforeClose(ctx context.Context) bool {
@@ -58,10 +151,12 @@ func (a *App) beforeClose(ctx context.Context) bool {
 func (a *App) startup(ctx context.Context) {
 	a.ctx = ctx
 
+	imageCacheDir := filepath.Join("data", "images")
 	exePath, err := os.Executable()
 	if err == nil {
 		exeDir := filepath.Dir(exePath)
 		os.Chdir(exeDir)
+		imageCacheDir = filepath.Join(exeDir, "data", "images")
 		dbPath := filepath.Join(exeDir, "yatori.db")
 		if err := dao.InitDB(dbPath); err != nil {
 			log.Printf("数据库初始化失败: %v", err)
@@ -74,6 +169,9 @@ func (a *App) startup(ctx context.Context) {
 	}
 
 	utils.YatoriCoreInit()
+	//题目图片统一缓存在软件目录 data/images，并定时清理过期文件
+	utils.SetImageCacheDir(imageCacheDir)
+	utils.StartImageCacheCleaner(6*time.Hour, 3*24*time.Hour)
 
 	a.recordLaunch()
 
@@ -240,16 +338,21 @@ func (a *App) watchCourseLocks() {
 						// 不在自检日期区间：保持待处理状态，不自动续刷
 						return
 					}
-					for _, lock := range list {
-						_ = dao.MarkCourseLockHandled(lock.ID)
-					}
 					if act := activity.GetActivity(uid); act != nil && act.IsRunning() {
+						// 已有任务在跑，本次到点锁由正在运行的任务覆盖
+						for _, lock := range list {
+							_ = dao.MarkCourseLockHandled(lock.ID)
+						}
 						return
 					}
 					first := list[0]
 					monitor.GlobalEventBus.AddLog(uid, "🕒 课程 ["+first.CourseName+"] 节点 ["+first.Label+" "+first.NodeName+"] 已到开放时间，自动续刷")
 					if err := service.StartBrush(uid); err != nil {
 						monitor.GlobalEventBus.AddLog(uid, "自动续刷未启动: "+err.Error())
+						return
+					}
+					for _, lock := range list {
+						_ = dao.MarkCourseLockHandled(lock.ID)
 					}
 				}()
 			}
@@ -426,16 +529,25 @@ func (a *App) watchConfigFile() {
 				cfg := config.ReadConfig(configPath)
 				for i := range cfg.Users {
 					user := cfg.Users[i]
-					existing, _ := dao.QueryUserByAccount(user.Account, user.AccountType)
-					if existing == nil {
-						ccData := &entity.CoursesCustomData{
-						VideoModel:      user.CoursesCustom.VideoModel,
-						AutoExam:        user.CoursesCustom.AutoExam,
-						ExamAutoSubmit:  user.CoursesCustom.ExamAutoSubmit,
-						ShuffleSw:       user.CoursesCustom.ShuffleSw,
-						StudyTime:       user.CoursesCustom.StudyTime,
-						IncludeCourses:  user.CoursesCustom.IncludeCourses,
-						ExcludeCourses:  user.CoursesCustom.ExcludeCourses,
+					existing, _ := dao.QueryUserByAccount(user.AccountType, user.Account)
+					if existing != nil {
+						continue
+					}
+					ccData := &entity.CoursesCustomData{
+						VideoModel:         user.CoursesCustom.VideoModel,
+						AutoExam:           user.CoursesCustom.AutoExam,
+						ExamAutoSubmit:     user.CoursesCustom.ExamAutoSubmit,
+						ShuffleSw:          user.CoursesCustom.ShuffleSw,
+						StudyTime:          user.CoursesCustom.StudyTime,
+						IncludeCourses:     user.CoursesCustom.IncludeCourses,
+						ExcludeCourses:     user.CoursesCustom.ExcludeCourses,
+						SelfCheckSw:        user.CoursesCustom.SelfCheckSw,
+						SelfCheckStartDate: user.CoursesCustom.SelfCheckStartDate,
+						SelfCheckEndDate:   user.CoursesCustom.SelfCheckEndDate,
+						CxExtendReadSw:     user.CoursesCustom.CxExtendReadSw,
+						CxBbsSw:            user.CoursesCustom.CxBbsSw,
+						CxWorkRetake:       user.CoursesCustom.CxWorkRetake,
+						CxRetakeRate:       user.CoursesCustom.CxRetakeRate,
 					}
 					if user.CoursesCustom.CxNode != nil {
 						ccData.CxNode = *user.CoursesCustom.CxNode
@@ -449,22 +561,19 @@ func (a *App) watchConfigFile() {
 					if user.CoursesCustom.CxExamSw != nil {
 						ccData.CxExamSw = *user.CoursesCustom.CxExamSw
 					}
-					ccData.CxExtendReadSw = user.CoursesCustom.CxExtendReadSw
-					ccData.CxBbsSw = user.CoursesCustom.CxBbsSw
-					ccData.CxWorkRetake = user.CoursesCustom.CxWorkRetake
-					ccData.CxRetakeRate = user.CoursesCustom.CxRetakeRate
-						req := entity.AddAccountRequest{
-							AccountType:   user.AccountType,
-							Url:           user.URL,
-							RemarkName:    user.RemarkName,
-							Account:       user.Account,
-							Password:      user.Password,
-							ShowDocSw:     user.ShowDocSw,
-							ShowDocUrls:   user.ShowDocUrls,
-							CoursesCustom: ccData,
-						}
-						service.AddAccount(req)
+					req := entity.AddAccountRequest{
+						AccountType:   user.AccountType,
+						Url:           user.URL,
+						RemarkName:    user.RemarkName,
+						Account:       user.Account,
+						Password:      user.Password,
+						IsProxy:       user.IsProxy,
+						InformEmails:  user.InformEmails,
+						ShowDocSw:     user.ShowDocSw,
+						ShowDocUrls:   user.ShowDocUrls,
+						CoursesCustom: ccData,
 					}
+					service.AddAccount(req)
 				}
 				runtime.EventsEmit(a.ctx, "config:reloaded", nil)
 			}

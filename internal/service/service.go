@@ -2,6 +2,7 @@ package service
 
 import (
 	"encoding/json"
+	"fmt"
 	"yatori-UI/internal/activity"
 	"yatori-UI/internal/checker"
 	"yatori-UI/internal/config"
@@ -149,7 +150,12 @@ func UpdateAccount(req entity.UpdateAccountRequest) error {
 	}
 
 	var existingConfig config.User
-	json.Unmarshal([]byte(user.UserConfigJson), &existingConfig)
+	if err := json.Unmarshal([]byte(user.UserConfigJson), &existingConfig); err != nil {
+		return fmt.Errorf("账号配置解析失败: %v", err)
+	}
+	if existingConfig.CoursesCustom.CxNode == nil {
+		existingConfig.CoursesCustom.CxNode = intPtr(3)
+	}
 
 	if req.AccountType != "" { existingConfig.AccountType = req.AccountType }
 	if req.Url != "" { existingConfig.URL = req.Url }
@@ -180,7 +186,9 @@ func UpdateAccount(req entity.UpdateAccountRequest) error {
 		existingConfig.CoursesCustom.CxBbsSw = req.CoursesCustom.CxBbsSw
 		existingConfig.CoursesCustom.CxWorkRetake = req.CoursesCustom.CxWorkRetake
 		existingConfig.CoursesCustom.CxRetakeRate = req.CoursesCustom.CxRetakeRate
-		if *existingConfig.CoursesCustom.CxNode == 0 { existingConfig.CoursesCustom.CxNode = intPtr(3) }
+		if *existingConfig.CoursesCustom.CxNode == 0 {
+			existingConfig.CoursesCustom.CxNode = intPtr(3)
+		}
 	}
 
 	userConfigJson, _ := json.Marshal(existingConfig)

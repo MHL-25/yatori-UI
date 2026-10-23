@@ -133,6 +133,7 @@ const CheckPage: React.FC = () => {
   }, [accounts, checkReports, activeUid])
 
   const report = activeUid ? checkReports[activeUid] : undefined
+  const reportCourses = report?.courses || []
 
   const filteredAccounts = useMemo(() => {
     const kw = keyword.trim().toLowerCase()
@@ -350,8 +351,8 @@ const CheckPage: React.FC = () => {
                 </div>
 
                 <div className="space-y-2.5">
-                  {report.courses.map((c) => <CourseCard key={c.courseId + c.courseName} course={c} />)}
-                  {report.courses.length === 0 && (
+                  {reportCourses.map((c) => <CourseCard key={c.courseId + c.courseName} course={c} />)}
+                  {reportCourses.length === 0 && (
                     <div className="surface-card p-8 text-center text-sm text-dark-400">该账号暂无课程数据</div>
                   )}
                 </div>

@@ -1,0 +1,981 @@
+package aiq
+
+// AI答题
+
+import (
+	"bytes"
+	"encoding/json"
+	"errors"
+	"fmt"
+	"io/ioutil"
+	"log"
+	"net/http"
+	"strings"
+	"time"
+
+	"github.com/yatori-dev/yatori-go-core/models/ctype"
+)
+
+// AIChatMessages ChatGLMChat struct that holds the chat messages.
+type AIChatMessages struct {
+	Messages []Message `json:"messages"`
+}
+
+type MessageContent struct {
+	Type     string    `json:"type"`
+	Text     string    `json:"text,omitempty"`
+	ImageUrl *ImageURL `json:"image_url,omitempty"`
+}
+
+type ImageURL struct {
+	URL string `json:"url"`
+}
+
+type Message struct {
+	Role    string      `json:"role"`
+	Content interface{} `json:"content"`
+}
+
+func NewTextMessage(role string, content string) Message {
+	return Message{Role: role, Content: content}
+}
+
+func NewVisualMessage(role string, contents []MessageContent) Message {
+	return Message{Role: role, Content: contents}
+}
+
+func ContentToString(content interface{}) string {
+	switch v := content.(type) {
+	case string:
+		return v
+	case []MessageContent:
+		var sb strings.Builder
+		for _, c := range v {
+			if c.Type == "text" && c.Text != "" {
+				sb.WriteString(c.Text)
+				sb.WriteString("\n")
+			}
+		}
+		return sb.String()
+	default:
+		return fmt.Sprintf("%v", content)
+	}
+}
+
+func BuildTextContentItems(text string, images []string) []MessageContent {
+	items := []MessageContent{{Type: "text", Text: text}}
+	for _, img := range images {
+		items = append(items, MessageContent{
+			Type:     "image_url",
+			ImageUrl: &ImageURL{URL: img},
+		})
+	}
+	return items
+}
+
+// AiSem 限制同时并发的 AI 调用数量（容量=2）
+var AiSem = make(chan struct{}, 2)
+
+// AggregationAIApi 聚合所有AI接口，直接通过aiType判断然后返回内容
+func AggregationAIApi(url,
+	model string,
+	aiType ctype.AiType,
+	aiChatMessages AIChatMessages,
+	apiKey string) (string, error) {
+
+	// 获取信号量（阻塞，直到有空位）
+	AiSem <- struct{}{}
+	defer func() {
+		<-AiSem // 释放信号量
+	}()
+
+	switch aiType {
+	case ctype.ChatGLM:
+		return ChatGLMChatReplyApi(model, apiKey, aiChatMessages, 7, nil)
+	case ctype.XingHuo:
+		return XingHuoChatReplyApi(model, apiKey, aiChatMessages, 7, nil)
+	case ctype.TongYi:
+		return TongYiChatReplyApi(model, apiKey, aiChatMessages, 7, nil)
+	case ctype.DouBao:
+		return DouBaoChatReplyApi(model, apiKey, aiChatMessages, 7, nil)
+	case ctype.OpenAi:
+		return OpenAiReplyApi(url, model, apiKey, aiChatMessages, 7, nil)
+	case ctype.MetaAi:
+		return MetaAIReplyApi(model, apiKey, aiChatMessages, 7, nil)
+	case ctype.DeepSeek:
+		return DeepSeekChatReplyApi(model, apiKey, aiChatMessages, 7, nil)
+	case ctype.Silicon:
+		return SiliconFlowReplyApi(model, apiKey, aiChatMessages, 7, nil)
+	case ctype.Other:
+		return OtherChatReplyApi(url, model, apiKey, aiChatMessages, 7, nil)
+	default:
+		return "", errors.New("AI Type: " + string(aiType))
+	}
+}
+
+func AggregationVisualAIApi(url, model string, aiType ctype.AiType, aiChatMessages AIChatMessages, apiKey string) (string, error) {
+	AiSem <- struct{}{}
+	defer func() { <-AiSem }()
+
+	switch aiType {
+	case ctype.TongYi:
+		return TongYiChatReplyApi(model, apiKey, aiChatMessages, 7, nil)
+	case ctype.ChatGLM:
+		return ChatGLMChatReplyApi(model, apiKey, aiChatMessages, 7, nil)
+	case ctype.XingHuo:
+		return XingHuoChatReplyApi(model, apiKey, aiChatMessages, 7, nil)
+	case ctype.DouBao:
+		return DouBaoChatReplyApi(model, apiKey, aiChatMessages, 7, nil)
+	case ctype.OpenAi:
+		return OpenAiReplyApi(url, model, apiKey, aiChatMessages, 7, nil)
+	case ctype.DeepSeek:
+		return DeepSeekChatReplyApi(model, apiKey, aiChatMessages, 7, nil)
+	case ctype.Silicon:
+		return SiliconFlowReplyApi(model, apiKey, aiChatMessages, 7, nil)
+	case ctype.Other:
+		return OtherChatReplyApi(url, model, apiKey, aiChatMessages, 7, nil)
+	case ctype.MetaAi:
+		return "", errors.New("秘塔AI不支持识图功能")
+	default:
+		return "", errors.New("AI Type: " + string(aiType))
+	}
+}
+
+// AICheck AI可用性检测
+func AICheck(url, model, apiKey string, aiType ctype.AiType) error {
+	aiChatMessages := AIChatMessages{
+		Messages: []Message{
+			{
+				Role:    "user",
+				Content: `请你原模原样输出：["测试成功"]`,
+			},
+		},
+	}
+
+	if aiType == "" {
+		return errors.New("AI Type: " + "请先填写AIType参数，详细参考官方文档：https://yatori-dev.github.io/yatori-docs/yatori-go-console/docs.html")
+	}
+	if apiKey == "" {
+		return errors.New("无效apiKey，请检查apiKey是否正确填写，详细情参考对应AI平台的API文档或者对应yatori的官方文档：https://yatori-dev.github.io/yatori-docs/yatori-go-console/docs.html")
+	}
+	_, err := AggregationAIApi(url, model, aiType, aiChatMessages, apiKey)
+
+	return err
+}
+
+// TongYiChatReplyApi 通义千问API
+func TongYiChatReplyApi(
+	model,
+	apiKey string,
+	aiChatMessages AIChatMessages,
+	retryNum int, /*最大重连次数*/
+	lastErr error,
+) (string, error) {
+	if retryNum < 0 { //重连次数用完直接返回
+		return "", lastErr
+	}
+	if model == "" {
+		model = "qwen-plus-latest"
+	}
+	tr := &http.Transport{}
+	client := &http.Client{
+		Transport: tr,
+		Timeout:   60 * time.Second, // Set connection and read timeout
+	}
+
+	url := "https://dashscope.aliyuncs.com/compatible-mode/v1/chat/completions"
+	requestBody := map[string]interface{}{
+		"model":       model,
+		"temperature": 0.2,
+		"messages":    aiChatMessages.Messages,
+		//"response_format": map[string]string{"type": "json_object"},
+	}
+
+	jsonData, err := json.Marshal(requestBody)
+	if err != nil {
+		return "", fmt.Errorf("failed to marshal JSON data: %v", err)
+	}
+
+	req, err := http.NewRequest("POST", url, bytes.NewBuffer(jsonData))
+	if err != nil {
+		return "", fmt.Errorf("failed to create HTTP request: %v", err)
+	}
+
+	req.Header.Set("Authorization", "Bearer "+apiKey)
+	req.Header.Set("Content-Type", "application/json")
+
+	resp, err := client.Do(req)
+	if err != nil {
+		time.Sleep(100 * time.Millisecond)
+		return TongYiChatReplyApi(model, apiKey, aiChatMessages, retryNum-1, fmt.Errorf("failed to execute HTTP request: %v", err))
+	}
+	defer resp.Body.Close()
+
+	body, err := ioutil.ReadAll(resp.Body)
+	if err != nil {
+		time.Sleep(100 * time.Millisecond)
+		return TongYiChatReplyApi(model, apiKey, aiChatMessages, retryNum-1, fmt.Errorf("failed to read response body: %v", err))
+	}
+
+	var responseMap map[string]interface{}
+	if err := json.Unmarshal(body, &responseMap); err != nil {
+		time.Sleep(100 * time.Millisecond)
+		return TongYiChatReplyApi(model, apiKey, aiChatMessages, retryNum-1, fmt.Errorf("failed to parse JSON response: %v  response body: %s", err, body))
+	}
+
+	//处理异常
+	resultMsg, ok := responseMap["message"].(string)
+	if ok && strings.Contains(resultMsg, "Request processing has failed") {
+		return TongYiChatReplyApi(model, apiKey, aiChatMessages, retryNum-1, fmt.Errorf("AI回复内容未找到，AI返回信息：%s", string(body)))
+	}
+	choices, ok := responseMap["choices"].([]interface{})
+	if !ok || len(choices) == 0 {
+		return "", fmt.Errorf("AI回复内容未找到，AI返回信息：%s", string(body))
+	}
+
+	message, ok := choices[0].(map[string]interface{})["message"].(map[string]interface{})
+	if !ok {
+		return "", fmt.Errorf("failed to parse message from response")
+	}
+
+	content, ok := message["content"].(string)
+	if !ok {
+		return "", fmt.Errorf("content field missing or not a string in response")
+	}
+		return content, nil
+}
+
+// ChatGLM API
+func ChatGLMChatReplyApi(
+	model,
+	apiKey string,
+	aiChatMessages AIChatMessages,
+	retryNum int, /*最大重连次数*/
+	lastErr error,
+) (string, error) {
+	if model == "" {
+		model = "glm-4"
+	}
+	if retryNum < 0 { //重连次数用完直接返回
+		return "", lastErr
+	}
+	tr := &http.Transport{}
+	client := &http.Client{
+		Transport: tr,
+		Timeout:   60 * time.Second, // Set connection and read timeout
+	}
+
+	url := "https://open.bigmodel.cn/api/paas/v4/chat/completions"
+	requestBody := map[string]interface{}{
+		"model":       model,
+		"temperature": 0.2,
+		"messages":    aiChatMessages.Messages,
+		//"response_format": map[string]string{"type": "json_object"},
+	}
+
+	jsonData, err := json.Marshal(requestBody)
+	if err != nil {
+		return "", fmt.Errorf("failed to marshal JSON data: %v", err)
+	}
+
+	req, err := http.NewRequest("POST", url, bytes.NewBuffer(jsonData))
+	if err != nil {
+		return "", fmt.Errorf("failed to create HTTP request: %v", err)
+	}
+
+	req.Header.Set("Authorization", "Bearer "+apiKey)
+	req.Header.Set("Content-Type", "application/json")
+
+	resp, err := client.Do(req)
+	if err != nil {
+		time.Sleep(100 * time.Millisecond)
+		return ChatGLMChatReplyApi(model, apiKey, aiChatMessages, retryNum-1, fmt.Errorf("failed to execute HTTP request: %v", err))
+	}
+	defer resp.Body.Close()
+
+	body, err := ioutil.ReadAll(resp.Body)
+	if err != nil {
+		time.Sleep(100 * time.Millisecond)
+		return ChatGLMChatReplyApi(model, apiKey, aiChatMessages, retryNum-1, fmt.Errorf("failed to read response body: %v", err))
+	}
+
+	var responseMap map[string]interface{}
+	if err := json.Unmarshal(body, &responseMap); err != nil {
+		time.Sleep(100 * time.Millisecond)
+		return ChatGLMChatReplyApi(model, apiKey, aiChatMessages, retryNum-1, fmt.Errorf("failed to parse JSON response: %v   response body: %s", err, body))
+	}
+
+	//处理异常
+	resultMsg, ok := responseMap["message"].(string)
+	if ok && strings.Contains(resultMsg, "Request processing has failed") {
+		return ChatGLMChatReplyApi(model, apiKey, aiChatMessages, retryNum-1, fmt.Errorf("AI回复内容未找到，AI返回信息：%s", string(body)))
+	}
+	choices, ok := responseMap["choices"].([]interface{})
+	if !ok || len(choices) == 0 {
+		return "", fmt.Errorf("AI回复内容未找到，AI返回信息：%s", string(body))
+	}
+
+	message, ok := choices[0].(map[string]interface{})["message"].(map[string]interface{})
+	if !ok {
+		return "", fmt.Errorf("failed to parse message from response")
+	}
+
+	content, ok := message["content"].(string)
+	if !ok {
+		return "", fmt.Errorf("content field missing or not a string in response")
+	}
+
+		return content, nil
+}
+
+// 星火API
+func XingHuoChatReplyApi(model,
+	apiKey string,
+	aiChatMessages AIChatMessages,
+	retryNum int, /*最大重连次数*/
+	lastErr error,
+) (string, error) {
+	if retryNum < 0 { //重连次数用完直接返回
+		return "", lastErr
+	}
+	if model == "" {
+		model = "generalv3.5" //默认模型
+	}
+	tr := &http.Transport{}
+	client := &http.Client{
+		Transport: tr,
+		Timeout:   60 * time.Second, // Set connection and read timeout
+	}
+
+	url := "https://spark-api-open.xf-yun.com/v1/chat/completions"
+	requestBody := map[string]interface{}{
+		"model":       model,
+		"temperature": 0.2,
+		"messages":    aiChatMessages.Messages,
+		//"response_format": map[string]string{"type": "json_object"},
+	}
+
+	jsonData, err := json.Marshal(requestBody)
+	if err != nil {
+		time.Sleep(100 * time.Millisecond)
+		return XingHuoChatReplyApi(model, apiKey, aiChatMessages, retryNum-1, fmt.Errorf("failed to marshal JSON data: %v", err))
+	}
+
+	req, err := http.NewRequest("POST", url, bytes.NewBuffer(jsonData))
+	if err != nil {
+		time.Sleep(100 * time.Millisecond)
+		return XingHuoChatReplyApi(model, apiKey, aiChatMessages, retryNum-1, fmt.Errorf("failed to create HTTP request: %v", err))
+
+	}
+
+	req.Header.Set("Authorization", "Bearer "+apiKey)
+	req.Header.Set("Content-Type", "application/json")
+
+	resp, err := client.Do(req)
+	if err != nil {
+		time.Sleep(100 * time.Millisecond)
+		return XingHuoChatReplyApi(model, apiKey, aiChatMessages, retryNum-1, fmt.Errorf("failed to execute HTTP request: %v", err))
+	}
+	defer resp.Body.Close()
+
+	body, err := ioutil.ReadAll(resp.Body)
+	if err != nil {
+		time.Sleep(100 * time.Millisecond)
+		return XingHuoChatReplyApi(model, apiKey, aiChatMessages, retryNum-1, err)
+	}
+
+	var responseMap map[string]interface{}
+	if err := json.Unmarshal(body, &responseMap); err != nil {
+		time.Sleep(100 * time.Millisecond)
+		return XingHuoChatReplyApi(model, apiKey, aiChatMessages, retryNum-1, fmt.Errorf("failed to parse JSON response: %v   response body: %s", err, body))
+	}
+	//处理异常
+	resultMsg, ok := responseMap["message"].(string)
+	if ok && strings.Contains(resultMsg, "Request processing has failed") {
+		return XingHuoChatReplyApi(model, apiKey, aiChatMessages, retryNum-1, fmt.Errorf("AI回复内容未找到，AI返回信息：%s", string(body)))
+	}
+	choices, ok := responseMap["choices"].([]interface{})
+	if !ok || len(choices) == 0 {
+		//防止傻逼星火认为频繁调用报错的问题，踏马老子都加锁了还频繁调用，我频繁密码了
+		if strings.Contains(responseMap["error"].(map[string]interface{})["message"].(string), "AppIdQpsOverFlow") {
+			time.Sleep(100 * time.Millisecond)
+			return XingHuoChatReplyApi(model, apiKey, aiChatMessages, retryNum-1, err)
+		}
+		log.Printf("unexpected response structure: %v", responseMap)
+		return "", fmt.Errorf("AI回复内容未找到，AI返回信息：%s", string(body))
+	}
+
+	message, ok := choices[0].(map[string]interface{})["message"].(map[string]interface{})
+	if !ok {
+		return "", fmt.Errorf("failed to parse message from response")
+	}
+
+	content, ok := message["content"].(string)
+	if !ok {
+		return "", fmt.Errorf("content field missing or not a string in response")
+	}
+		return content, nil
+}
+
+// DouBaoChatReplyApi 豆包API
+func DouBaoChatReplyApi(model,
+	apiKey string,
+	aiChatMessages AIChatMessages,
+	retryNum int, /*最大重连次数*/
+	lastErr error,
+) (string, error) {
+	if retryNum < 0 { //重连次数用完直接返回
+		return "", lastErr
+	}
+
+	tr := &http.Transport{}
+	client := &http.Client{
+		Transport: tr,
+		Timeout:   60 * time.Second, // Set connection and read timeout
+	}
+
+	urlStr := "https://ark.cn-beijing.volces.com/api/v3/chat/completions"
+	requestBody := map[string]interface{}{
+		"model":       model,
+		"temperature": 0.2,
+		"messages":    aiChatMessages.Messages,
+		//"response_format": map[string]string{"type": "json_object"},
+	}
+
+	jsonData, err := json.Marshal(requestBody)
+	if err != nil {
+		return "", fmt.Errorf("failed to marshal JSON data: %v", err)
+	}
+
+	req, err := http.NewRequest("POST", urlStr, bytes.NewBuffer(jsonData))
+	if err != nil {
+		return "", fmt.Errorf("failed to create HTTP request: %v", err)
+	}
+
+	req.Header.Set("Authorization", "Bearer "+apiKey)
+	req.Header.Set("Content-Type", "application/json")
+
+	resp, err := client.Do(req)
+	if err != nil {
+		time.Sleep(100 * time.Millisecond)
+		return DouBaoChatReplyApi(model, apiKey, aiChatMessages, retryNum-1, fmt.Errorf("failed to execute HTTP request: %v", err))
+
+	}
+	defer resp.Body.Close()
+
+	body, err := ioutil.ReadAll(resp.Body)
+	if err != nil {
+		time.Sleep(100 * time.Millisecond)
+		return DouBaoChatReplyApi(model, apiKey, aiChatMessages, retryNum-1, fmt.Errorf("failed to read response body: %v", err))
+	}
+
+	var responseMap map[string]interface{}
+	if err := json.Unmarshal(body, &responseMap); err != nil {
+		time.Sleep(100 * time.Millisecond)
+		return DouBaoChatReplyApi(model, apiKey, aiChatMessages, retryNum-1, fmt.Errorf("failed to parse JSON response: %v    response body: %s", err, body))
+	}
+	//处理异常
+	resultMsg, ok := responseMap["message"].(string)
+	if ok && strings.Contains(resultMsg, "Request processing has failed") {
+		return DouBaoChatReplyApi(model, apiKey, aiChatMessages, retryNum-1, fmt.Errorf("AI回复内容未找到，AI返回信息：%s", string(body)))
+	}
+	choices, ok := responseMap["choices"].([]interface{})
+	if !ok || len(choices) == 0 {
+		log.Printf("unexpected response structure: %v", responseMap)
+		return "", fmt.Errorf("AI回复内容未找到，AI返回信息：%s", string(body))
+	}
+
+	message, ok := choices[0].(map[string]interface{})["message"].(map[string]interface{})
+	if !ok {
+		return "", fmt.Errorf("failed to parse message from response")
+	}
+
+	content, ok := message["content"].(string)
+	if !ok {
+		return "", fmt.Errorf("content field missing or not a string in response")
+	}
+		return content, nil
+}
+
+// OpenAiReplyApi ChatGPT的API
+func OpenAiReplyApi(apiUrl, model,
+	apiKey string,
+	aiChatMessages AIChatMessages,
+	retryNum int, /*最大重连次数*/
+	lastErr error,
+) (string, error) {
+	if retryNum < 0 { //重连次数用完直接返回
+		return "", lastErr
+	}
+
+	tr := &http.Transport{}
+	client := &http.Client{
+		Transport: tr,
+		Timeout:   60 * time.Second, // Set connection and read timeout
+	}
+
+	url := normalizeOpenAICompatibleURL(apiUrl)
+	requestBody := map[string]interface{}{
+		"model":       model,
+		"temperature": 0.2,
+		"messages":    aiChatMessages.Messages,
+	}
+
+	jsonData, err := json.Marshal(requestBody)
+	if err != nil {
+		return "", fmt.Errorf("failed to marshal JSON data: %v", err)
+	}
+
+	req, err := http.NewRequest("POST", url, bytes.NewBuffer(jsonData))
+	if err != nil {
+		return "", fmt.Errorf("failed to create HTTP request: %v", err)
+	}
+
+	req.Header.Set("Authorization", "Bearer "+apiKey)
+	req.Header.Set("Content-Type", "application/json")
+
+	resp, err := client.Do(req)
+	if err != nil {
+		time.Sleep(100 * time.Millisecond)
+		return OpenAiReplyApi(url, model, apiKey, aiChatMessages, retryNum-1, fmt.Errorf("failed to execute HTTP request: %v", err))
+
+	}
+	defer resp.Body.Close()
+
+	body, err := ioutil.ReadAll(resp.Body)
+	if err != nil {
+		time.Sleep(100 * time.Millisecond)
+		return OpenAiReplyApi(url, model, apiKey, aiChatMessages, retryNum-1, fmt.Errorf("failed to read response body: %v", err))
+	}
+
+	var responseMap map[string]interface{}
+	if err := json.Unmarshal(body, &responseMap); err != nil {
+		time.Sleep(100 * time.Millisecond)
+		return OpenAiReplyApi(url, model, apiKey, aiChatMessages, retryNum-1, fmt.Errorf("failed to parse JSON response: %v    response body: %s", err, body))
+	}
+	//优先返回接口业务错误，避免被“未找到回复内容”掩盖
+	if errObj, ok := responseMap["error"].(map[string]interface{}); ok {
+		code := fmt.Sprintf("%v", errObj["code"])
+		message := fmt.Sprintf("%v", errObj["message"])
+		//访问量过大/限流/服务端临时异常时短暂重试
+		if code == "1305" || code == "429" || code == "500" || code == "502" || code == "503" || code == "504" {
+			if retryNum > 0 {
+				time.Sleep(2 * time.Second)
+				return OpenAiReplyApi(url, model, apiKey, aiChatMessages, retryNum-1, fmt.Errorf("AI接口错误(%s): %s", code, message))
+			}
+		}
+		return "", fmt.Errorf("AI接口错误(%s): %s", code, message)
+	}
+	//处理异常
+	resultMsg, ok := responseMap["message"].(string)
+	if ok && strings.Contains(resultMsg, "Request processing has failed") {
+		return OpenAiReplyApi(url, model, apiKey, aiChatMessages, retryNum-1, fmt.Errorf("AI回复内容未找到，AI返回信息：%s", string(body)))
+	}
+	choices, ok := responseMap["choices"].([]interface{})
+	if !ok || len(choices) == 0 {
+		log.Printf("unexpected response structure: %v", responseMap)
+		return "", fmt.Errorf("AI回复内容未找到，AI返回信息：%s", string(body))
+	}
+
+	message, ok := choices[0].(map[string]interface{})["message"].(map[string]interface{})
+	if !ok {
+		return "", fmt.Errorf("failed to parse message from response")
+	}
+
+	content, ok := message["content"].(string)
+	if !ok {
+		return "", fmt.Errorf("content field missing or not a string in response")
+	}
+		return content, nil
+}
+
+// normalizeOpenAICompatibleURL 允许 OpenAI 类型使用任意 OpenAI 兼容接口地址
+func normalizeOpenAICompatibleURL(raw string) string {
+	raw = strings.TrimSpace(raw)
+	if raw == "" {
+		return "https://api.openai.com/v1/chat/completions"
+	}
+	raw = strings.TrimRight(raw, "/")
+	if strings.Contains(raw, "/chat/completions") {
+		return raw
+	}
+	if strings.HasSuffix(raw, "/v1") || strings.HasSuffix(raw, "/v4") {
+		return raw + "/chat/completions"
+	}
+	return raw + "/chat/completions"
+}
+
+// DeepSeekChatReplyApi DeepSeek API
+func DeepSeekChatReplyApi(model,
+	apiKey string,
+	aiChatMessages AIChatMessages,
+	retryNum int, /*最大重连次数*/
+	lastErr error,
+) (string, error) {
+	if retryNum < 0 { //重连次数用完直接返回
+		return "", lastErr
+	}
+
+	tr := &http.Transport{}
+	client := &http.Client{
+		Transport: tr,
+		Timeout:   60 * time.Second, // Set connection and read timeout
+	}
+	if model == "" {
+		model = "deepseek-chat" //默认模型
+	}
+	url := "https://api.deepseek.com/chat/completions"
+	requestBody := map[string]interface{}{
+		"model":       model,
+		"temperature": 0.2,
+		"messages":    aiChatMessages.Messages,
+		//"response_format": map[string]string{"type": "json_object"},
+	}
+
+	jsonData, err := json.Marshal(requestBody)
+	if err != nil {
+		return "", fmt.Errorf("failed to marshal JSON data: %v", err)
+	}
+
+	req, err := http.NewRequest("POST", url, bytes.NewBuffer(jsonData))
+	if err != nil {
+		return "", fmt.Errorf("failed to create HTTP request: %v", err)
+	}
+
+	req.Header.Set("Authorization", "Bearer "+apiKey)
+	req.Header.Set("Content-Type", "application/json")
+
+	resp, err := client.Do(req)
+	if err != nil {
+		time.Sleep(100 * time.Millisecond)
+		return DeepSeekChatReplyApi(model, apiKey, aiChatMessages, retryNum-1, fmt.Errorf("failed to execute HTTP request: %v", err))
+
+	}
+	defer resp.Body.Close()
+
+	body, err := ioutil.ReadAll(resp.Body)
+	if err != nil {
+		time.Sleep(100 * time.Millisecond)
+		return DeepSeekChatReplyApi(model, apiKey, aiChatMessages, retryNum-1, fmt.Errorf("failed to read response body: %v", err))
+	}
+
+	var responseMap map[string]interface{}
+	if err := json.Unmarshal(body, &responseMap); err != nil {
+		time.Sleep(100 * time.Millisecond)
+		return DeepSeekChatReplyApi(model, apiKey, aiChatMessages, retryNum-1, fmt.Errorf("failed to parse JSON response: %v    response body: %s", err, body))
+	}
+	//处理异常
+	resultMsg, ok := responseMap["message"].(string)
+	if ok && strings.Contains(resultMsg, "Request processing has failed") {
+		return DeepSeekChatReplyApi(model, apiKey, aiChatMessages, retryNum-1, fmt.Errorf("AI回复内容未找到，AI返回信息：%s", string(body)))
+	}
+	choices, ok := responseMap["choices"].([]interface{})
+	if !ok || len(choices) == 0 {
+		log.Printf("unexpected response structure: %v", responseMap)
+		return "", fmt.Errorf("AI回复内容未找到，AI返回信息：%s", string(body))
+	}
+
+	message, ok := choices[0].(map[string]interface{})["message"].(map[string]interface{})
+	if !ok {
+		return "", fmt.Errorf("failed to parse message from response")
+	}
+
+	content, ok := message["content"].(string)
+	if !ok {
+		return "", fmt.Errorf("content field missing or not a string in response")
+	}
+		return content, nil
+}
+
+// SiliconFlowReplyApi 硅基流动 API
+func SiliconFlowReplyApi(model,
+	apiKey string,
+	aiChatMessages AIChatMessages,
+	retryNum int, /*最大重连次数*/
+	lastErr error,
+) (string, error) {
+	if retryNum < 0 { //重连次数用完直接返回
+		return "", lastErr
+	}
+
+	tr := &http.Transport{}
+	client := &http.Client{
+		Transport: tr,
+		Timeout:   60 * time.Second, // Set connection and read timeout
+	}
+	if model == "" {
+		model = "Qwen/Qwen2.5-7B-Instruct" //默认模型
+	}
+	url := "https://api.siliconflow.cn/v1/chat/completions"
+	requestBody := map[string]interface{}{
+		"model":       model,
+		"temperature": 0.2,
+		"messages":    aiChatMessages.Messages,
+		//"response_format": map[string]string{"type": "json_object"},
+	}
+
+	jsonData, err := json.Marshal(requestBody)
+	if err != nil {
+		return "", fmt.Errorf("failed to marshal JSON data: %v", err)
+	}
+
+	req, err := http.NewRequest("POST", url, bytes.NewBuffer(jsonData))
+	if err != nil {
+		return "", fmt.Errorf("failed to create HTTP request: %v", err)
+	}
+
+	req.Header.Set("Authorization", "Bearer "+apiKey)
+	req.Header.Set("Content-Type", "application/json")
+
+	resp, err := client.Do(req)
+	if err != nil {
+		time.Sleep(100 * time.Millisecond)
+		return SiliconFlowReplyApi(model, apiKey, aiChatMessages, retryNum-1, fmt.Errorf("failed to execute HTTP request: %v", err))
+
+	}
+	defer resp.Body.Close()
+
+	body, err := ioutil.ReadAll(resp.Body)
+	if err != nil {
+		time.Sleep(100 * time.Millisecond)
+		return SiliconFlowReplyApi(model, apiKey, aiChatMessages, retryNum-1, fmt.Errorf("failed to read response body: %v", err))
+	}
+
+	var responseMap map[string]interface{}
+	if err := json.Unmarshal(body, &responseMap); err != nil {
+		time.Sleep(100 * time.Millisecond)
+		return SiliconFlowReplyApi(model, apiKey, aiChatMessages, retryNum-1, fmt.Errorf("failed to parse JSON response: %v    response body: %s", err, body))
+	}
+	//处理异常
+	resultMsg, ok := responseMap["message"].(string)
+	if ok {
+		if strings.Contains(resultMsg, "Request processing has failed") {
+			return SiliconFlowReplyApi(model, apiKey, aiChatMessages, retryNum-1, fmt.Errorf("AI回复内容未找到，AI返回信息：%s", string(body)))
+		} else if strings.Contains(resultMsg, `The API key format is incorrect`) { //有时候硅基流动会抽风
+			return SiliconFlowReplyApi(model, apiKey, aiChatMessages, retryNum-1, fmt.Errorf("AI回复内容未找到，AI返回信息：%s", string(body)))
+		}
+	}
+	choices, ok := responseMap["choices"].([]interface{})
+	if !ok || len(choices) == 0 {
+		//if strings.Contains(string(body),`"message":"The API key format is incorrect. Request id`){
+		//	return SiliconFlowReplyApi(model,)
+		//}
+		log.Printf("unexpected response structure: %v", responseMap)
+		return "", fmt.Errorf("AI回复内容未找到，AI返回信息：%s", string(body))
+	}
+
+	message, ok := choices[0].(map[string]interface{})["message"].(map[string]interface{})
+	if !ok {
+		return "", fmt.Errorf("failed to parse message from response")
+	}
+
+	content, ok := message["content"].(string)
+	if !ok {
+		return "", fmt.Errorf("content field missing or not a string in response")
+	}
+		return content, nil
+}
+
+// 秘塔AI搜索
+func MetaAIReplyApi(model, apiKey string, aiChatMessages AIChatMessages, retryNum int, lastErr error) (string, error) {
+	if retryNum < 0 {
+		return "", lastErr
+	}
+	url := "https://metaso.cn/api/v1/chat/completions"
+	method := "POST"
+
+	buildString := ""
+	for _, message := range aiChatMessages.Messages {
+		buildString += ContentToString(message.Content) + "\n"
+	}
+	//如果model为空则采用默认模型
+	if model == "" {
+		model = "fast"
+	}
+
+	//转换并构建秘塔的信息
+	type MetaEntity struct {
+		Q      string `json:"q"`
+		Model  string `json:"model"`
+		Format string `json:"format"`
+		Scope  string `json:"scope"`
+	}
+	entity := MetaEntity{Q: buildString, Model: model, Format: "simple", Scope: "ducument"}
+	marshal, err1 := json.Marshal(entity)
+	if err1 != nil {
+		return "", fmt.Errorf("failed to marshal JSON data: %v", err1)
+	}
+	payload := strings.NewReader(string(marshal))
+
+	tr := &http.Transport{}
+	client := &http.Client{
+		Transport: tr,
+		Timeout:   60 * time.Second, // Set connection and read timeout
+	}
+	req, err := http.NewRequest(method, url, payload)
+
+	if err != nil {
+		return "", nil
+	}
+	req.Header.Add("Authorization", "Bearer "+apiKey)
+	req.Header.Add("User-Agent", "Apifox/1.0.0 (https://apifox.com)")
+	req.Header.Add("Content-Type", "application/json")
+	req.Header.Add("Accept", "*/*")
+	req.Header.Add("Host", "metaso.cn")
+	req.Header.Add("Connection", "keep-alive")
+
+	res, err := client.Do(req)
+	if err != nil {
+		return MetaAIReplyApi(model, apiKey, aiChatMessages, retryNum-1, fmt.Errorf("failed to create HTTP request: %v", err))
+	}
+	defer res.Body.Close()
+
+	body, err := ioutil.ReadAll(res.Body)
+	if err != nil {
+		fmt.Println(err)
+		return "", nil
+	}
+	//fmt.Println(string(body))
+	var responseMap map[string]interface{}
+	if err := json.Unmarshal(body, &responseMap); err != nil {
+		time.Sleep(100 * time.Millisecond)
+		return MetaAIReplyApi(model, apiKey, aiChatMessages, retryNum-1, lastErr)
+	}
+	//处理异常
+	resultMsg, ok := responseMap["message"].(string)
+	if ok && strings.Contains(resultMsg, "Request processing has failed") {
+		return MetaAIReplyApi(model, apiKey, aiChatMessages, retryNum-1, fmt.Errorf("AI回复内容未找到，AI返回信息：%s", string(body)))
+	}
+	response, ok := responseMap["answer"].(string)
+	if !ok || len(response) == 0 {
+		return "", fmt.Errorf("%s", string(body))
+	}
+
+	return response, nil
+}
+
+// OtherChatReplyApi 其他支持CHATGPT API格式的AI模型接入
+// 尝试从模型返回中提取标准 JSON 数组（兼容 ```json 包裹、<think>...</think> 前置思考等）
+func normalizeJSONAnswerContent(raw string) string {
+	s := strings.TrimSpace(raw)
+	if s == "" {
+		return s
+	}
+
+	// 去掉 markdown 代码块标记
+	s = strings.ReplaceAll(s, "```json", "")
+	s = strings.ReplaceAll(s, "```JSON", "")
+	s = strings.ReplaceAll(s, "```", "")
+	s = strings.TrimSpace(s)
+
+	// 去掉 <think>...</think>
+	for {
+		lower := strings.ToLower(s)
+		start := strings.Index(lower, "<think>")
+		if start == -1 {
+			break
+		}
+		end := strings.Index(lower[start:], "</think>")
+		if end == -1 {
+			// 没闭合则直接裁掉 think 起始后的内容
+			s = strings.TrimSpace(s[:start])
+			break
+		}
+		end = start + end + len("</think>")
+		s = strings.TrimSpace(s[:start] + " " + s[end:])
+	}
+
+	// 提取首个 JSON 数组
+	l := strings.Index(s, "[")
+	r := strings.LastIndex(s, "]")
+	if l != -1 && r != -1 && r > l {
+		return strings.TrimSpace(s[l : r+1])
+	}
+	return strings.TrimSpace(s)
+}
+
+func OtherChatReplyApi(url,
+	model,
+	apiKey string,
+	aiChatMessages AIChatMessages,
+	retryNum int, /*最大重连次数*/
+	lastErr error,
+) (string, error) {
+	if retryNum < 0 { //重连次数用完直接返回
+		return "", lastErr
+	}
+	tr := &http.Transport{}
+	client := &http.Client{
+		Transport: tr,
+		Timeout:   60 * time.Second, // Set connection and read timeout
+	}
+
+	// 兼容部分非 OpenAI 标准兼容接口（如 MiniMax chatcompletion_v2）
+	// 这类接口会拒绝 system role，这里退化为 user，避免直接 2013 invalid params。
+	normalizedMessages := make([]Message, 0, len(aiChatMessages.Messages))
+	for _, m := range aiChatMessages.Messages {
+		if strings.EqualFold(m.Role, "system") {
+			m.Role = "user"
+		}
+		normalizedMessages = append(normalizedMessages, m)
+	}
+
+	requestBody := map[string]interface{}{
+		"model":       model,
+		"temperature": 0.2,
+		"messages":    normalizedMessages,
+		//"response_format": map[string]string{"type": "json_object"},
+	}
+
+	jsonData, err := json.Marshal(requestBody)
+	if err != nil {
+		return "", fmt.Errorf("failed to marshal JSON data: %v", err)
+	}
+
+	req, err := http.NewRequest("POST", url, bytes.NewBuffer(jsonData))
+	if err != nil {
+		return "", fmt.Errorf("failed to create HTTP request: %v", err)
+	}
+
+	req.Header.Set("Authorization", "Bearer "+apiKey)
+	req.Header.Set("Content-Type", "application/json")
+
+	resp, err := client.Do(req)
+	if err != nil {
+		time.Sleep(100 * time.Millisecond)
+		return OtherChatReplyApi(url, model, apiKey, aiChatMessages, retryNum-1, fmt.Errorf("failed to execute HTTP request: %v", err))
+	}
+	defer resp.Body.Close()
+
+	body, err := ioutil.ReadAll(resp.Body)
+	if err != nil {
+		time.Sleep(100 * time.Millisecond)
+		return OtherChatReplyApi(url, model, apiKey, aiChatMessages, retryNum-1, fmt.Errorf("failed to read response body: %v", err))
+	}
+
+	var responseMap map[string]interface{}
+	if err := json.Unmarshal(body, &responseMap); err != nil {
+		time.Sleep(100 * time.Millisecond)
+		return OtherChatReplyApi(url, model, apiKey, aiChatMessages, retryNum-1, fmt.Errorf("failed to parse JSON response: %v    response body: %s", err, body))
+	}
+	//处理异常
+	resultMsg, ok := responseMap["message"].(string)
+	if ok && strings.Contains(resultMsg, "Request processing has failed") {
+		return OtherChatReplyApi(url, model, apiKey, aiChatMessages, retryNum-1, fmt.Errorf("AI回复内容未找到，AI返回信息：%s", string(body)))
+	}
+	choices, ok := responseMap["choices"].([]interface{})
+	if !ok || len(choices) == 0 {
+		return "", fmt.Errorf("AI回复内容未找到，AI返回信息：%s", string(body))
+	}
+
+	message, ok := choices[0].(map[string]interface{})["message"].(map[string]interface{})
+	if !ok {
+		return "", fmt.Errorf("failed to parse message from response")
+	}
+
+	content, ok := message["content"].(string)
+	if !ok {
+		return "", fmt.Errorf("content field missing or not a string in response")
+	}
+	return content, nil
+}

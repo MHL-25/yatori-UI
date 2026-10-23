@@ -67,6 +67,8 @@ export function StartBrush(arg1:string):Promise<string>;
 
 export function StopBrush(arg1:string):Promise<string>;
 
+export function TestAIConnection(arg1:string):Promise<string>;
+
 export function ToggleMaximizeWindow():Promise<void>;
 
 export function UpdateAccount(arg1:string):Promise<string>;

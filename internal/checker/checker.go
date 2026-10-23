@@ -15,7 +15,9 @@ import (
 	"yatori-UI/internal/studyplan"
 
 	"github.com/yatori-dev/yatori-go-core/aggregation/xuexitong"
+	"github.com/yatori-dev/yatori-go-core/aggregation/yinghua"
 	xuexitongApi "github.com/yatori-dev/yatori-go-core/api/xuexitong"
+	yinghuaApi "github.com/yatori-dev/yatori-go-core/api/yinghua"
 )
 
 var checkLocks sync.Map // map[string]*sync.Mutex
@@ -48,6 +50,15 @@ func Check(uid string, setting config.Setting) (*entity.CheckReport, error) {
 
 	monitor.GlobalEventBus.UpdateStatus(uid, monitor.StatusLogging)
 	monitor.GlobalEventBus.AddLog(uid, "🔍 开始课程质检...")
+
+	if user.AccountType == "YINGHUA" {
+		checkYingHua(user, report, setting)
+		save(report)
+		monitor.GlobalEventBus.UpdateStatus(uid, monitor.StatusIdle)
+		monitor.GlobalEventBus.AddLog(uid, fmt.Sprintf("✅ 质检完成: %d 门课程，完成 %d，待刷 %d，受限 %d",
+			report.TotalCourses, report.CompletedCourses, report.PendingCourses, report.LockedCourses))
+		return report, nil
+	}
 
 	if user.AccountType != "XUEXITONG" {
 		report.Courses = append(report.Courses, entity.CheckCourse{
@@ -211,6 +222,168 @@ func Check(uid string, setting config.Setting) (*entity.CheckReport, error) {
 	return report, nil
 }
 
+// checkYingHua 英华学堂课程质检：课程列表 + 章节节点 + 锁定/进度
+func checkYingHua(user *entity.UserPO, report *entity.CheckReport, setting config.Setting) {
+	uid := user.Uid
+	cache, err := loginYingHua(user.Url, user.Account, user.Password)
+	if err != nil {
+		monitor.GlobalEventBus.SetError(uid, "质检登录失败: "+err.Error())
+		report.Courses = append(report.Courses, entity.CheckCourse{
+			CourseName: "登录失败",
+			Reason:     err.Error(),
+		})
+		report.TotalCourses = 1
+		return
+	}
+	monitor.GlobalEventBus.AddLog(uid, "🔑 英华登录成功")
+
+	courses, err := yinghua.CourseListAction(cache)
+	if err != nil {
+		monitor.GlobalEventBus.SetError(uid, "拉取课程失败: "+err.Error())
+		report.Courses = append(report.Courses, entity.CheckCourse{
+			CourseName: "拉取课程失败",
+			Reason:     err.Error(),
+		})
+		report.TotalCourses = 1
+		return
+	}
+	monitor.GlobalEventBus.AddLog(uid, fmt.Sprintf("📚 质检课程数: %d", len(courses)))
+
+	now := time.Now()
+	for _, course := range courses {
+		cc := entity.CheckCourse{
+			CourseID:   course.Id,
+			CourseName: course.Name,
+			JobRate:    normalizeYingHuaProgress(course.Progress),
+			Chapters:   make([]entity.CheckChapter, 0),
+		}
+
+		nodes, nodeErr := yinghua.VideosListAction(cache, course)
+		if nodeErr != nil {
+			cc.Reason = "拉取章节失败: " + nodeErr.Error()
+			cc.JobTotal = course.VideoCount
+			cc.JobFinished = course.VideoLearned
+			report.Courses = append(report.Courses, cc)
+			monitor.GlobalEventBus.AddLog(uid, fmt.Sprintf("⚠️ [%s] %s", course.Name, cc.Reason))
+			continue
+		}
+
+		var timeLocks []entity.CourseLockPO
+		completedCount, openCount, lockedCount := 0, 0, 0
+		for index, node := range nodes {
+			completed := node.Progress >= 99.9 || node.State == 2
+			jobTotal, jobFinished := 1, 0
+			if !node.TabVideo && !node.TabWork && !node.TabExam && !node.TabFile {
+				jobTotal = 0
+			}
+			if completed && jobTotal > 0 {
+				jobFinished = 1
+				completedCount++
+			}
+			lockType := string(studyplan.LockOpen)
+			status := "open"
+			message := ""
+			unlockAt := ""
+			if !completed {
+				if node.NodeLock > 0 && node.UnlockTime.After(now) {
+					lockType = string(studyplan.LockTime)
+					status = "time"
+					unlockAt = node.UnlockTime.Format("2006-01-02 15:04")
+					message = "未到开放时间"
+					timeLocks = append(timeLocks, entity.CourseLockPO{
+						Uid:         uid,
+						AccountName: report.AccountName,
+						CourseID:    course.Id,
+						CourseName:  course.Name,
+						NodeID:      node.Id,
+						NodeName:    node.Name,
+						Label:       fmt.Sprintf("%d", index+1),
+						UnlockAt:    node.UnlockTime,
+						Reason:      "time",
+					})
+					lockedCount++
+				} else if node.NodeLock > 0 {
+					lockType = string(studyplan.LockClosed)
+					status = "close"
+					message = "节点未解锁"
+					lockedCount++
+				} else {
+					openCount++
+				}
+			}
+			cc.JobTotal += jobTotal
+			cc.JobFinished += jobFinished
+			cc.Chapters = append(cc.Chapters, entity.CheckChapter{
+				Label:       fmt.Sprintf("%d", index+1),
+				Name:        node.Name,
+				NodeID:      node.Id,
+				JobTotal:    jobTotal,
+				JobFinished: jobFinished,
+				Status:      status,
+				LockType:    lockType,
+				UnlockAt:    unlockAt,
+				Message:     message,
+			})
+		}
+		if cc.JobTotal == 0 {
+			cc.JobTotal = course.VideoCount
+			cc.JobFinished = course.VideoLearned
+		}
+		if cc.JobTotal > 0 {
+			cc.JobRate = float64(cc.JobFinished) / float64(cc.JobTotal) * 100
+		}
+
+		switch {
+		case cc.JobTotal > 0 && cc.JobFinished >= cc.JobTotal:
+			cc.CanStudy = false
+			cc.Reason = "课程已完成"
+		case !course.EndDate.IsZero() && course.EndDate.Before(now):
+			cc.CanStudy = false
+			cc.Reason = "课程已结束"
+		case openCount > 0:
+			cc.CanStudy = true
+		default:
+			cc.CanStudy = false
+			cc.Reason = fmt.Sprintf("已完成 %d 节 / 待刷 0 节 / 定时 %d 节 / 锁定 %d 节", completedCount, lockedCount, lockedCount)
+		}
+		report.Courses = append(report.Courses, cc)
+		if err := dao.ReplaceCourseLocks(uid, course.Id, timeLocks); err != nil {
+			monitor.GlobalEventBus.AddLog(uid, "⚠️ 保存定时开放记录失败: "+err.Error())
+		}
+		monitor.GlobalEventBus.AddLog(uid, fmt.Sprintf("📗 [%s] 进度 %.1f%% | 可学习: %v", course.Name, cc.JobRate, cc.CanStudy))
+	}
+
+	report.TotalCourses = len(report.Courses)
+	for _, c := range report.Courses {
+		if c.JobTotal > 0 && c.JobFinished >= c.JobTotal {
+			report.CompletedCourses++
+		} else if c.CanStudy {
+			report.PendingCourses++
+		} else {
+			report.LockedCourses++
+		}
+	}
+}
+
+func normalizeYingHuaProgress(progress float64) float64 {
+	if progress <= 1 {
+		return progress * 100
+	}
+	return progress
+}
+
+func loginYingHua(url, account, password string) (*yinghuaApi.YingHuaUserCache, error) {
+	cache := &yinghuaApi.YingHuaUserCache{
+		PreUrl:   url,
+		Account:  account,
+		Password: password,
+	}
+	if yinghua.IsYingHuaCookieOrToken(password) {
+		return cache, yinghua.YingHuaCookieLoginAction(cache)
+	}
+	return cache, yinghua.YingHuaLoginAction(cache)
+}
+
 func save(report *entity.CheckReport) {
 	data, err := json.Marshal(report)
 	if err != nil {
@@ -251,6 +424,26 @@ func CourseList(uid string, setting config.Setting) ([]entity.CourseBrief, error
 	if user == nil {
 		return nil, fmt.Errorf("账号不存在")
 	}
+	if user.AccountType == "YINGHUA" {
+		cache, err := loginYingHua(user.Url, user.Account, user.Password)
+		if err != nil {
+			return nil, err
+		}
+		courses, err := yinghua.CourseListAction(cache)
+		if err != nil {
+			return nil, err
+		}
+		result := make([]entity.CourseBrief, 0, len(courses))
+		for _, c := range courses {
+			result = append(result, entity.CourseBrief{
+				CourseID:   c.Id,
+				CourseName: c.Name,
+				JobRate:    normalizeYingHuaProgress(c.Progress),
+				IsStart:    true,
+			})
+		}
+		return result, nil
+	}
 	if user.AccountType != "XUEXITONG" {
 		return nil, fmt.Errorf("当前平台暂不支持一键查询课程")
 	}
@@ -276,6 +469,29 @@ func CourseList(uid string, setting config.Setting) ([]entity.CourseBrief, error
 
 // CourseListByCredentials 使用表单中的账号密码临时登录并查询课程，不写入数据库。
 func CourseListByCredentials(req entity.CourseQueryRequest) ([]entity.CourseBrief, error) {
+	if req.AccountType == "YINGHUA" {
+		if req.Account == "" || req.Password == "" {
+			return nil, fmt.Errorf("请先填写账号和密码/Cookie")
+		}
+		cache, err := loginYingHua(req.URL, req.Account, req.Password)
+		if err != nil {
+			return nil, fmt.Errorf("登录失败: %w", err)
+		}
+		courses, err := yinghua.CourseListAction(cache)
+		if err != nil {
+			return nil, err
+		}
+		result := make([]entity.CourseBrief, 0, len(courses))
+		for _, c := range courses {
+			result = append(result, entity.CourseBrief{
+				CourseID:   c.Id,
+				CourseName: c.Name,
+				JobRate:    normalizeYingHuaProgress(c.Progress),
+				IsStart:    true,
+			})
+		}
+		return result, nil
+	}
 	if req.AccountType != "XUEXITONG" {
 		return nil, fmt.Errorf("当前平台暂不支持一键查询课程")
 	}

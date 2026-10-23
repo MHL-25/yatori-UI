@@ -3,6 +3,7 @@ frontend/dist/
 frontend/node_modules/
 frontend/package.json.md5
 成品/
+data/
 *.exe
 *.db
 *.yaml

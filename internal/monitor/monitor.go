@@ -51,13 +51,31 @@ func (eb *EventBus) AddListener(fn func(eventType string, data interface{})) {
 }
 
 func (eb *EventBus) emit(eventType string, data interface{}) {
+	// 进度对象按值传递，避免监听方异步读取时与后续写入产生数据竞争
+	if p, ok := data.(*TaskProgress); ok && p != nil {
+		cp := *p
+		cp.Logs = make([]string, len(p.Logs))
+		copy(cp.Logs, p.Logs)
+		data = &cp
+	}
 	eb.mu.RLock()
 	listeners := make([]func(eventType string, data interface{}), len(eb.listeners))
 	copy(listeners, eb.listeners)
 	eb.mu.RUnlock()
+	// 同步派发，保证日志与状态按产生顺序到达前端
 	for _, fn := range listeners {
-		go fn(eventType, data)
+		fn(eventType, data)
 	}
+}
+
+func snapshotProgress(p *TaskProgress) *TaskProgress {
+	if p == nil {
+		return nil
+	}
+	cp := *p
+	cp.Logs = make([]string, len(p.Logs))
+	copy(cp.Logs, p.Logs)
+	return &cp
 }
 
 func (eb *EventBus) InitProgress(uid, accountName, platform string) {
@@ -74,39 +92,40 @@ func (eb *EventBus) InitProgress(uid, accountName, platform string) {
 	}
 	eb.mu.Lock()
 	eb.progress[uid] = p
+	snapshot := snapshotProgress(p)
 	eb.mu.Unlock()
-	eb.emit("progress_update", p)
+	eb.emit("progress_update", snapshot)
 }
 
 func (eb *EventBus) UpdateStatus(uid string, status TaskStatus) {
-	var p *TaskProgress
+	var snapshot *TaskProgress
 	eb.mu.Lock()
 	if pp, ok := eb.progress[uid]; ok {
 		pp.Status = status
-		p = pp
+		snapshot = snapshotProgress(pp)
 	}
 	eb.mu.Unlock()
-	if p != nil {
-		eb.emit("progress_update", p)
+	if snapshot != nil {
+		eb.emit("progress_update", snapshot)
 	}
 }
 
 func (eb *EventBus) UpdateProgress(uid string, progress float64, currentTask string) {
-	var p *TaskProgress
+	var snapshot *TaskProgress
 	eb.mu.Lock()
 	if pp, ok := eb.progress[uid]; ok {
 		pp.Progress = progress
 		pp.CurrentTask = currentTask
-		p = pp
+		snapshot = snapshotProgress(pp)
 	}
 	eb.mu.Unlock()
-	if p != nil {
-		eb.emit("progress_update", p)
+	if snapshot != nil {
+		eb.emit("progress_update", snapshot)
 	}
 }
 
 func (eb *EventBus) UpdateCourseProgress(uid string, done, total int) {
-	var p *TaskProgress
+	var snapshot *TaskProgress
 	eb.mu.Lock()
 	if pp, ok := eb.progress[uid]; ok {
 		pp.DoneCourses = done
@@ -114,41 +133,41 @@ func (eb *EventBus) UpdateCourseProgress(uid string, done, total int) {
 		if total > 0 {
 			pp.Progress = float64(done) / float64(total) * 100
 		}
-		p = pp
+		snapshot = snapshotProgress(pp)
 	}
 	eb.mu.Unlock()
-	if p != nil {
-		eb.emit("progress_update", p)
+	if snapshot != nil {
+		eb.emit("progress_update", snapshot)
 	}
 }
 
 func (eb *EventBus) AddLog(uid string, log string) {
-	var p *TaskProgress
+	var snapshot *TaskProgress
 	eb.mu.Lock()
 	if pp, ok := eb.progress[uid]; ok {
 		pp.Logs = append(pp.Logs, log)
 		if len(pp.Logs) > 200 {
 			pp.Logs = pp.Logs[len(pp.Logs)-200:]
 		}
-		p = pp
+		snapshot = snapshotProgress(pp)
 	}
 	eb.mu.Unlock()
-	if p != nil {
+	if snapshot != nil {
 		eb.emit("log_update", map[string]interface{}{"uid": uid, "log": log})
 	}
 }
 
 func (eb *EventBus) SetError(uid string, errMsg string) {
-	var p *TaskProgress
+	var snapshot *TaskProgress
 	eb.mu.Lock()
 	if pp, ok := eb.progress[uid]; ok {
 		pp.Status = StatusError
 		pp.ErrorMessage = errMsg
-		p = pp
+		snapshot = snapshotProgress(pp)
 	}
 	eb.mu.Unlock()
-	if p != nil {
-		eb.emit("progress_update", p)
+	if snapshot != nil {
+		eb.emit("progress_update", snapshot)
 	}
 }
 
