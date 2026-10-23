@@ -37,7 +37,7 @@ type App struct {
 	launchCount  int
 }
 
-const AppVersion = "1.2.2"
+const AppVersion = "1.2.3"
 
 func NewApp() *App {
 	return &App{notified: make(map[string]time.Time)}
@@ -138,7 +138,8 @@ func (a *App) startup(ctx context.Context) {
 	go a.startupAutomation()
 }
 
-// startupAutomation 启动后按账号自检时间窗执行质检与自动刷课
+// startupAutomation 启动后按账号自检日期区间执行质检与自动刷课。
+// 多账号最多 5 个并发处理，避免逐个等待。
 func (a *App) startupAutomation() {
 	time.Sleep(3 * time.Second)
 	cfg := config.EnsureConfigFile("./config.yaml")
@@ -146,41 +147,56 @@ func (a *App) startupAutomation() {
 	if err != nil {
 		return
 	}
+	go a.watchCourseLocks()
+
 	autoCheck := cfg.Setting.BasicSetting.AutoCheckSw == 1
 	autoStart := cfg.Setting.BasicSetting.AutoStartSw == 1
 	if !autoCheck && !autoStart {
 		return
 	}
-	for _, u := range users {
-		var userCfg config.User
-		_ = json.Unmarshal([]byte(u.UserConfigJson), &userCfg)
-		ok, reason := config.InSelfCheckWindow(userCfg, time.Now())
-		if !ok {
-			monitor.GlobalEventBus.AddLog(u.Uid, "⏰ 跳过自动任务："+reason)
-			continue
-		}
-		monitor.GlobalEventBus.AddLog(u.Uid, "⏰ 自检时间窗校验通过："+reason)
 
-		var report *entity.CheckReport
-		if autoCheck {
-			report, err = checker.Check(u.Uid, cfg.Setting)
-			if err != nil {
-				monitor.GlobalEventBus.AddLog(u.Uid, "❌ 自动质检失败: "+err.Error())
-				continue
+	const maxConcurrency = 5
+	sem := make(chan struct{}, maxConcurrency)
+	var wg sync.WaitGroup
+	for i := range users {
+		u := users[i]
+		wg.Add(1)
+		go func() {
+			defer wg.Done()
+			sem <- struct{}{}
+			defer func() { <-sem }()
+
+			var userCfg config.User
+			_ = json.Unmarshal([]byte(u.UserConfigJson), &userCfg)
+			ok, reason := config.InSelfCheckWindow(userCfg, time.Now())
+			if !ok {
+				monitor.GlobalEventBus.AddLog(u.Uid, "⏰ 跳过自动任务："+reason)
+				return
 			}
-		}
-		if !autoStart {
-			continue
-		}
-		if report != nil && report.PendingCourses == 0 && report.CompletedCourses == report.TotalCourses {
-			monitor.GlobalEventBus.AddLog(u.Uid, "✅ 所有课程已完成，无需自动刷课")
-			continue
-		}
-		if err := service.StartBrush(u.Uid); err != nil {
-			monitor.GlobalEventBus.AddLog(u.Uid, "自动刷课未启动: "+err.Error())
-		}
+			monitor.GlobalEventBus.AddLog(u.Uid, "⏰ 自检日期校验通过："+reason)
+
+			var report *entity.CheckReport
+			if autoCheck {
+				rep, checkErr := checker.Check(u.Uid, cfg.Setting)
+				if checkErr != nil {
+					monitor.GlobalEventBus.AddLog(u.Uid, "❌ 自动质检失败: "+checkErr.Error())
+					return
+				}
+				report = rep
+			}
+			if !autoStart {
+				return
+			}
+			if report != nil && report.PendingCourses == 0 && report.CompletedCourses == report.TotalCourses {
+				monitor.GlobalEventBus.AddLog(u.Uid, "✅ 所有课程已完成，无需自动刷课")
+				return
+			}
+			if err := service.StartBrush(u.Uid); err != nil {
+				monitor.GlobalEventBus.AddLog(u.Uid, "自动刷课未启动: "+err.Error())
+			}
+		}()
 	}
-	go a.watchCourseLocks()
+	wg.Wait()
 }
 
 // watchCourseLocks 每分钟检查定时开放节点，到点自动续刷对应账号
@@ -196,27 +212,48 @@ func (a *App) watchCourseLocks() {
 			if err != nil || len(locks) == 0 {
 				continue
 			}
+			// 按账号分组，同一账号只启动一次，最多 5 个账号并发
+			groups := make(map[string][]entity.CourseLockPO)
 			for _, lock := range locks {
-				user, err := dao.QueryUserByUid(lock.Uid)
-				if err != nil || user == nil {
-					_ = dao.MarkCourseLockHandled(lock.ID)
-					continue
-				}
-				var userCfg config.User
-				_ = json.Unmarshal([]byte(user.UserConfigJson), &userCfg)
-				if ok, reason := config.InSelfCheckWindow(userCfg, time.Now()); !ok {
-					monitor.GlobalEventBus.AddLog(lock.Uid, "⏰ 定时开放已到达，但不在自检时间窗："+reason)
-					continue
-				}
-				_ = dao.MarkCourseLockHandled(lock.ID)
-				if act := activity.GetActivity(lock.Uid); act != nil && act.IsRunning() {
-					continue
-				}
-				monitor.GlobalEventBus.AddLog(lock.Uid, "🕒 课程 ["+lock.CourseName+"] 节点 ["+lock.Label+" "+lock.NodeName+"] 已到开放时间，自动续刷")
-				if err := service.StartBrush(lock.Uid); err != nil {
-					monitor.GlobalEventBus.AddLog(lock.Uid, "自动续刷未启动: "+err.Error())
-				}
+				groups[lock.Uid] = append(groups[lock.Uid], lock)
 			}
+			sem := make(chan struct{}, 5)
+			var wg sync.WaitGroup
+			for uid, list := range groups {
+				uid, list := uid, list
+				wg.Add(1)
+				go func() {
+					defer wg.Done()
+					sem <- struct{}{}
+					defer func() { <-sem }()
+
+					user, err := dao.QueryUserByUid(uid)
+					if err != nil || user == nil {
+						for _, lock := range list {
+							_ = dao.MarkCourseLockHandled(lock.ID)
+						}
+						return
+					}
+					var userCfg config.User
+					_ = json.Unmarshal([]byte(user.UserConfigJson), &userCfg)
+					if ok, _ := config.InSelfCheckWindow(userCfg, time.Now()); !ok {
+						// 不在自检日期区间：保持待处理状态，不自动续刷
+						return
+					}
+					for _, lock := range list {
+						_ = dao.MarkCourseLockHandled(lock.ID)
+					}
+					if act := activity.GetActivity(uid); act != nil && act.IsRunning() {
+						return
+					}
+					first := list[0]
+					monitor.GlobalEventBus.AddLog(uid, "🕒 课程 ["+first.CourseName+"] 节点 ["+first.Label+" "+first.NodeName+"] 已到开放时间，自动续刷")
+					if err := service.StartBrush(uid); err != nil {
+						monitor.GlobalEventBus.AddLog(uid, "自动续刷未启动: "+err.Error())
+					}
+				}()
+			}
+			wg.Wait()
 		}
 	}
 }

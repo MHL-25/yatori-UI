@@ -140,12 +140,12 @@ func ReadConfig(filePath string) JSONDataForConfig {
 	if err != nil {
 		return configJson
 	}
-	// 旧配置文件没有启动自动化字段时，默认关闭，避免启动即刷课
+	// 旧配置文件没有启动自动化字段时默认开启，但账号未配置自检日期区间时仍不会自动执行
 	if !viper.IsSet("setting.basicSetting.autoCheckSw") {
-		configJson.Setting.BasicSetting.AutoCheckSw = 0
+		configJson.Setting.BasicSetting.AutoCheckSw = 1
 	}
 	if !viper.IsSet("setting.basicSetting.autoStartSw") {
-		configJson.Setting.BasicSetting.AutoStartSw = 0
+		configJson.Setting.BasicSetting.AutoStartSw = 1
 	}
 	return configJson
 }
@@ -166,8 +166,8 @@ func EnsureConfigFile(filePath string) *JSONDataForConfig {
 		cfg.Setting.BasicSetting.LogOutFileSw = 1
 		cfg.Setting.BasicSetting.LogLevel = "INFO"
 		cfg.Setting.BasicSetting.LogModel = 0
-		cfg.Setting.BasicSetting.AutoCheckSw = 0
-		cfg.Setting.BasicSetting.AutoStartSw = 0
+		cfg.Setting.BasicSetting.AutoCheckSw = 1
+		cfg.Setting.BasicSetting.AutoStartSw = 1
 		cfg.Setting.AiSetting.AiType = "TONGYI"
 		cfg.Setting.ApiQueSetting.Url = "http://localhost:8083"
 		SaveConfig(cfg, filePath)

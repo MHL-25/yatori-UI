@@ -68,11 +68,19 @@ const DisclaimerModal: React.FC<DisclaimerModalProps> = ({ onAccept, readOnly, o
           </div>
 
           <div className="border-t border-dark-700 pt-4">
+            <h3 className="text-accent-400 font-bold text-base mb-3">v1.2.3 更新内容</h3>
+            <ul className="list-disc list-inside space-y-1.5 text-dark-300">
+              <li>【新增】多账号启动自动质检改为并发处理，最多 5 个账号同时进行，不再逐个等待</li>
+              <li>【优化】定时开放节点续刷同样按账号并发处理，同一账号只启动一次</li>
+            </ul>
+          </div>
+
+          <div className="border-t border-dark-700 pt-4">
             <h3 className="text-accent-400 font-bold text-base mb-3">v1.2.2 修复内容</h3>
             <ul className="list-disc list-inside space-y-1.5 text-dark-300">
               <li>【修复】未配置自检日期区间时，启动后仍自动质检/刷课的问题</li>
               <li>【调整】现在只有开启自检开关且当天在日期区间内，才会自动质检/刷课；否则一律跳过</li>
-              <li>【调整】启动自动质检、自动刷课开关默认关闭，需手动开启</li>
+              <li>【调整】启动自动质检、自动刷课可在设置页关闭</li>
             </ul>
           </div>
 

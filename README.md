@@ -4,7 +4,7 @@
   <p>一款基于 Wails v2 框架构建的跨平台桌面端智能网课辅助工具</p>
   
   <div style="margin: 20px 0;">
-    <img src="https://img.shields.io/badge/Version-1.2.2-blue.svg?style=flat-square" alt="Version">
+    <img src="https://img.shields.io/badge/Version-1.2.3-blue.svg?style=flat-square" alt="Version">
     <img src="https://img.shields.io/badge/Go-1.24.0-00ADD8.svg?style=flat-square&logo=go" alt="Go">
     <img src="https://img.shields.io/badge/Wails-v2.11.0-FF6B6B.svg?style=flat-square" alt="Wails">
     <img src="https://img.shields.io/badge/React-18.2-61DAFB.svg?style=flat-square&logo=react" alt="React">
@@ -61,6 +61,7 @@
 | 账号自检时间窗 | ✅ | 按账号配置时段，启动时依据系统时间决定是否自动质检/刷课 |
 | 互动测验 | ✅ | 学习通视频弹题自动识别并提交答案 |
 | 启动次数赞助提示 | ✅ | 达到伪随机次数时提示，可关闭或不再提示 |
+| 多账号并发自检 | ✅ | 启动自动质检最多 5 个账号同时处理 |
 
 ---
 
