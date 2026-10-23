@@ -18,6 +18,8 @@ const SettingsPage: React.FC = () => {
   const [apiQueUrl, setApiQueUrl] = useState('http://localhost:8083')
   const [completionTone, setCompletionTone] = useState(1)
   const [logLevel, setLogLevel] = useState('INFO')
+  const [autoCheckSw, setAutoCheckSw] = useState(1)
+  const [autoStartSw, setAutoStartSw] = useState(1)
   const [emailSw, setEmailSw] = useState(0)
   const [smtpHost, setSmtpHost] = useState('')
   const [smtpPort, setSmtpPort] = useState(465)
@@ -40,6 +42,8 @@ const SettingsPage: React.FC = () => {
       setApiQueUrl(config.setting?.apiQueSetting?.url || 'http://localhost:8083')
       setCompletionTone(config.setting?.basicSetting?.completionTone ?? 1)
       setLogLevel(config.setting?.basicSetting?.logLevel || 'INFO')
+      setAutoCheckSw(config.setting?.basicSetting?.autoCheckSw ?? 1)
+      setAutoStartSw(config.setting?.basicSetting?.autoStartSw ?? 1)
       setEmailSw(config.setting?.emailInform?.sw ?? 0)
       setSmtpHost(config.setting?.emailInform?.smtpHost || '')
       setSmtpPort(config.setting?.emailInform?.smtpPort || 465)
@@ -53,7 +57,7 @@ const SettingsPage: React.FC = () => {
     try {
       const cfg = {
         setting: {
-          basicSetting: { completionTone, logLevel, colorLog: 1, logOutFileSw: 1, logModel: 0 },
+          basicSetting: { completionTone, logLevel, colorLog: 1, logOutFileSw: 1, logModel: 0, autoCheckSw, autoStartSw },
           aiSetting: { aiType, aiUrl, model: aiModel, API_KEY: aiApiKey },
           visionAiSetting: { aiType: visionAiType, aiUrl: visionAiUrl, model: visionAiModel, API_KEY: visionAiApiKey },
           apiQueSetting: { url: apiQueUrl },
@@ -194,6 +198,27 @@ const SettingsPage: React.FC = () => {
                     <option value="ERROR">错误 (ERROR)</option>
                   </select>
                 </div>
+
+                <div className="rounded-xl border border-dark-700 bg-dark-950/50 p-3 space-y-3">
+                  <div className="flex items-center justify-between">
+                    <div>
+                      <p className="text-sm font-medium text-dark-200">启动时自动质检</p>
+                      <p className="text-xs text-dark-400">软件打开后按账号自检时间窗检查课程完成情况</p>
+                    </div>
+                    <button onClick={() => setAutoCheckSw(autoCheckSw === 1 ? 0 : 1)} className={cn("w-10 h-5 rounded-full transition-colors relative", autoCheckSw === 1 ? "bg-accent-500" : "bg-dark-600")}>
+                      <div className={cn("w-4 h-4 rounded-full bg-white absolute top-0.5 transition-transform", autoCheckSw === 1 ? "translate-x-5" : "translate-x-0.5")} />
+                    </button>
+                  </div>
+                  <div className="flex items-center justify-between">
+                    <div>
+                      <p className="text-sm font-medium text-dark-200">质检后自动刷课</p>
+                      <p className="text-xs text-dark-400">仅当检测到有待刷课程时自动开始</p>
+                    </div>
+                    <button onClick={() => setAutoStartSw(autoStartSw === 1 ? 0 : 1)} className={cn("w-10 h-5 rounded-full transition-colors relative", autoStartSw === 1 ? "bg-accent-500" : "bg-dark-600")}>
+                      <div className={cn("w-4 h-4 rounded-full bg-white absolute top-0.5 transition-transform", autoStartSw === 1 ? "translate-x-5" : "translate-x-0.5")} />
+                    </button>
+                  </div>
+                </div>
               </div>
             )}
 
@@ -246,7 +271,7 @@ const SettingsPage: React.FC = () => {
             {activeTab === 'about' && (
               <div className="space-y-6">
                 <div className="flex items-center gap-4">
-                  <div className="w-16 h-16 rounded-2xl bg-gradient-to-br from-accent-500 to-neon-purple flex items-center justify-center shadow-lg shadow-accent-600/20">
+                  <div className="w-16 h-16 rounded-2xl bg-accent-500 flex items-center justify-center shadow-lg shadow-accent-600/20">
                     <span className="text-3xl">⚡</span>
                   </div>
                   <div>

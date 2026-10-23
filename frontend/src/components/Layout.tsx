@@ -1,7 +1,7 @@
 import React from 'react'
 import { useAppStore } from '../stores/useAppStore'
 import {
-  LayoutDashboard, Users, Activity, Settings,
+  LayoutDashboard, Users, Activity, Settings, ShieldCheck,
   Minus, Square, X, ChevronLeft, ChevronRight, Zap, MinusSquare
 } from 'lucide-react'
 import { cn } from '../utils/helpers'
@@ -9,6 +9,7 @@ import { cn } from '../utils/helpers'
 const navItems = [
   { id: 'dashboard', label: '仪表盘', icon: LayoutDashboard },
   { id: 'accounts', label: '账号管理', icon: Users },
+  { id: 'check', label: '课程质检', icon: ShieldCheck },
   { id: 'monitor', label: '任务监控', icon: Activity },
   { id: 'settings', label: '系统设置', icon: Settings },
 ]
@@ -42,8 +43,8 @@ const TitleBar: React.FC = () => {
   return (
     <div className="wails-drag flex items-center justify-between h-9 bg-dark-950/80 border-b border-dark-800/50 px-3 select-none">
       <div className="flex items-center gap-2">
-        <div className="w-5 h-5 rounded-md bg-gradient-to-br from-accent-500 to-neon-purple flex items-center justify-center">
-          <Zap size={12} className="text-white" />
+        <div className="w-5 h-5 rounded-md bg-accent-500 flex items-center justify-center">
+          <Zap size={12} className="text-dark-950" />
         </div>
         <span className="text-xs font-medium text-dark-300">Yatori-UI - 智能网课助手</span>
       </div>

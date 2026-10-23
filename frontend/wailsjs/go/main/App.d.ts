@@ -5,9 +5,19 @@ export function AcceptDisclaimer():Promise<void>;
 
 export function AddAccount(arg1:string):Promise<string>;
 
+export function CheckAccount(arg1:string):Promise<string>;
+
+export function CheckAccounts(arg1:string):Promise<string>;
+
+export function CheckAllAccounts():Promise<string>;
+
 export function CloseWindow():Promise<void>;
 
 export function DeleteAccount(arg1:string):Promise<string>;
+
+export function DisableDonatePrompt():Promise<void>;
+
+export function GetDonatePrompt():Promise<string>;
 
 export function GetAccountList():Promise<string>;
 
@@ -17,7 +27,13 @@ export function GetAllProgress():Promise<string>;
 
 export function GetAppVersion():Promise<string>;
 
+export function GetCheckReports():Promise<string>;
+
 export function GetConfig():Promise<string>;
+
+export function GetCourseList(arg1:string):Promise<string>;
+
+export function GetCourseLocks(arg1:string):Promise<string>;
 
 export function GetPlatforms():Promise<string>;
 

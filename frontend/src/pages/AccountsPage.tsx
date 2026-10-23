@@ -88,6 +88,15 @@ interface AccountFormData {
   studyTime: string
   includeCourses: string[]
   excludeCourses: string[]
+  selfCheckSw: number
+  selfCheckStartDate: string
+  selfCheckEndDate: string
+  showDocSw: number
+  showDocUrls: string[]
+  cxExtendReadSw: number
+  cxBbsSw: number
+  cxWorkRetake: number
+  cxRetakeRate: number
 }
 
 const defaultForm: AccountFormData = {
@@ -109,6 +118,15 @@ const defaultForm: AccountFormData = {
   studyTime: '',
   includeCourses: [],
   excludeCourses: [],
+  selfCheckSw: 0,
+  selfCheckStartDate: '',
+  selfCheckEndDate: '',
+  showDocSw: 0,
+  showDocUrls: [],
+  cxExtendReadSw: 1,
+  cxBbsSw: 0,
+  cxWorkRetake: 0,
+  cxRetakeRate: 80,
 }
 
 const AccountFormFields: React.FC<{
@@ -117,12 +135,52 @@ const AccountFormFields: React.FC<{
   showAdvanced: boolean
   setShowAdvanced: (v: boolean) => void
   isEdit?: boolean
-}> = ({ form, setForm, showAdvanced, setShowAdvanced, isEdit }) => {
+  hideIdentity?: boolean
+  courseSourceUid?: string
+}> = ({ form, setForm, showAdvanced, setShowAdvanced, isEdit, hideIdentity, courseSourceUid }) => {
   const needUrl = ['YINGHUA', 'CANGHUI', 'HQKJ'].includes(form.accountType)
   const needStudyTime = form.accountType === 'WELEARN'
+  const { fetchCourseList } = useAppStore()
+  const [coursePicker, setCoursePicker] = useState<'include' | 'exclude' | null>(null)
+  const [courseOptions, setCourseOptions] = useState<{ courseId: string; courseName: string; jobRate: number; isStart: boolean }[]>([])
+  const [courseKeyword, setCourseKeyword] = useState('')
+  const [courseSelected, setCourseSelected] = useState<Set<string>>(new Set())
+  const [courseLoading, setCourseLoading] = useState(false)
+
+  const openCoursePicker = async (mode: 'include' | 'exclude') => {
+    if (!courseSourceUid) {
+      alert('请先保存账号，再使用“一键查询课程”')
+      return
+    }
+    setCoursePicker(mode)
+    setCourseKeyword('')
+    setCourseSelected(new Set(mode === 'include' ? form.includeCourses : form.excludeCourses))
+    setCourseLoading(true)
+    const result = await fetchCourseList(courseSourceUid)
+    setCourseLoading(false)
+    if (!result.ok) {
+      alert(result.msg)
+      setCourseOptions([])
+      return
+    }
+    setCourseOptions(result.courses)
+  }
+
+  const confirmCoursePicker = () => {
+    const names = Array.from(courseSelected)
+    if (coursePicker === 'include') setForm({ ...form, includeCourses: names })
+    else if (coursePicker === 'exclude') setForm({ ...form, excludeCourses: names })
+    setCoursePicker(null)
+  }
+
+  const visibleCourses = courseOptions.filter((c) =>
+    !courseKeyword.trim() || c.courseName.toLowerCase().includes(courseKeyword.trim().toLowerCase())
+  )
 
   return (
     <>
+      {!hideIdentity && (
+        <>
       <div className="grid grid-cols-2 gap-3">
         <div>
           <label className="text-xs font-medium text-dark-300 mb-1 block">平台类型</label>
@@ -156,6 +214,29 @@ const AccountFormFields: React.FC<{
           <input type="password" value={form.password} onChange={e => setForm({ ...form, password: e.target.value })} placeholder="请输入密码" className="input-field" />
         </div>
       </div>
+        </>
+      )}
+
+      {hideIdentity && (
+        <div className="grid grid-cols-2 gap-3">
+          <div>
+            <label className="text-xs font-medium text-dark-300 mb-1 block">平台类型</label>
+            <select value={form.accountType} onChange={e => {
+              const newType = e.target.value
+              const modes = getVideoModes(newType)
+              const validMode = modes.find(m => m.value === form.videoModel) ? form.videoModel : modes[Math.min(1, modes.length - 1)].value
+              setForm({ ...form, accountType: newType, videoModel: validMode })
+            }} className="select-field" disabled={isEdit}>
+              {PLATFORM_LIST.map(p => <option key={p.id} value={p.id}>{p.icon} {p.name}</option>)}
+            </select>
+          </div>
+          <div>
+            <label className="text-xs font-medium text-dark-300 mb-1 block">备注名</label>
+            <input type="text" value={form.remarkName} onChange={e => setForm({ ...form, remarkName: e.target.value })}
+              placeholder="可选，方便识别" className="input-field" />
+          </div>
+        </div>
+      )}
 
       <div className="flex items-center justify-between p-2.5 rounded-lg bg-dark-800/30">
         <span className="text-sm text-dark-200">是否开启代理IP</span>
@@ -253,8 +334,115 @@ const AccountFormFields: React.FC<{
             </div>
           </div>
 
+          <div className="rounded-xl border border-dark-700 bg-dark-950/50 p-3 space-y-2">
+            <div className="flex items-center justify-between">
+              <div>
+                <div className="text-sm font-medium text-dark-100">自检日期区间</div>
+                <div className="text-[11px] text-dark-400 mt-0.5">仅在该日期范围内，软件启动后才自动质检并开始刷课</div>
+              </div>
+              <button onClick={() => setForm({ ...form, selfCheckSw: form.selfCheckSw === 1 ? 0 : 1 })}
+                className={cn("w-10 h-5 rounded-full transition-colors relative shrink-0", form.selfCheckSw === 1 ? "bg-accent-500" : "bg-dark-600")}>
+                <div className={cn("w-4 h-4 rounded-full bg-white absolute top-0.5 transition-transform", form.selfCheckSw === 1 ? "translate-x-5" : "translate-x-0.5")} />
+              </button>
+            </div>
+            {form.selfCheckSw === 1 && (
+              <div className="grid grid-cols-2 gap-3">
+                <div>
+                  <label className="text-xs font-medium text-dark-300 mb-1 block">开始日期</label>
+                  <input type="date" value={form.selfCheckStartDate} onChange={e => setForm({ ...form, selfCheckStartDate: e.target.value })} className="input-field" />
+                </div>
+                <div>
+                  <label className="text-xs font-medium text-dark-300 mb-1 block">结束日期</label>
+                  <input type="date" value={form.selfCheckEndDate} onChange={e => setForm({ ...form, selfCheckEndDate: e.target.value })} className="input-field" />
+                </div>
+                <p className="col-span-2 text-[11px] text-dark-400">包含起止当天；留空表示该端不限日期</p>
+              </div>
+            )}
+          </div>
+
+          <div className="rounded-xl border border-dark-700 bg-dark-950/50 p-3 space-y-2">
+            <div className="flex items-center justify-between">
+              <div>
+                <div className="text-sm font-medium text-dark-100">ShowDoc 微信推送</div>
+                <div className="text-[11px] text-dark-400 mt-0.5">该账号独立开关，可添加多个推送地址</div>
+              </div>
+              <button onClick={() => setForm({ ...form, showDocSw: form.showDocSw === 1 ? 0 : 1 })}
+                className={cn("w-10 h-5 rounded-full transition-colors relative shrink-0", form.showDocSw === 1 ? "bg-accent-500" : "bg-dark-600")}>
+                <div className={cn("w-4 h-4 rounded-full bg-white absolute top-0.5 transition-transform", form.showDocSw === 1 ? "translate-x-5" : "translate-x-0.5")} />
+              </button>
+            </div>
+            {form.showDocSw === 1 && (
+              <>
+                <div className="flex gap-2">
+                  <input type="text" placeholder="https://push.showdoc.com.cn/server/api/push/..."
+                    className="input-field flex-1"
+                    onKeyDown={e => {
+                      if (e.key === 'Enter') {
+                        const target = e.target as HTMLInputElement
+                        const v = target.value.trim()
+                        if (v && !form.showDocUrls.includes(v)) setForm({ ...form, showDocUrls: [...form.showDocUrls, v] })
+                        target.value = ''
+                      }
+                    }} />
+                </div>
+                {form.showDocUrls.length > 0 && (
+                  <div className="flex flex-wrap gap-1">
+                    {form.showDocUrls.map((u, i) => (
+                      <span key={i} className="inline-flex items-center gap-1 px-2 py-0.5 rounded bg-accent-500/10 text-accent-300 text-xs max-w-full">
+                        <span className="truncate max-w-[260px]">{u}</span>
+                        <button onClick={() => setForm({ ...form, showDocUrls: form.showDocUrls.filter((_, idx) => idx !== i) })}><XCircle size={12} /></button>
+                      </span>
+                    ))}
+                  </div>
+                )}
+              </>
+            )}
+          </div>
+
+          <div className="rounded-xl border border-dark-700 bg-dark-950/50 p-3 space-y-3">
+            <div className="flex items-center justify-between">
+              <div>
+                <div className="text-sm font-medium text-dark-100">拓展阅读</div>
+                <div className="text-[11px] text-dark-400 mt-0.5">自动完成课程「拓展材料」阅读上报</div>
+              </div>
+              <button onClick={() => setForm({ ...form, cxExtendReadSw: form.cxExtendReadSw === 1 ? 0 : 1 })}
+                className={cn("w-10 h-5 rounded-full transition-colors relative shrink-0", form.cxExtendReadSw === 1 ? "bg-accent-500" : "bg-dark-600")}>
+                <div className={cn("w-4 h-4 rounded-full bg-white absolute top-0.5 transition-transform", form.cxExtendReadSw === 1 ? "translate-x-5" : "translate-x-0.5")} />
+              </button>
+            </div>
+            <div className="flex items-center justify-between">
+              <div>
+                <div className="text-sm font-medium text-dark-100">讨论区全部话题</div>
+                <div className="text-[11px] text-dark-400 mt-0.5">AI 学生口吻回复未回复话题（会公开发布）</div>
+              </div>
+              <button onClick={() => setForm({ ...form, cxBbsSw: form.cxBbsSw === 1 ? 0 : 1 })}
+                className={cn("w-10 h-5 rounded-full transition-colors relative shrink-0", form.cxBbsSw === 1 ? "bg-accent-500" : "bg-dark-600")}>
+                <div className={cn("w-4 h-4 rounded-full bg-white absolute top-0.5 transition-transform", form.cxBbsSw === 1 ? "translate-x-5" : "translate-x-0.5")} />
+              </button>
+            </div>
+            <div className="grid grid-cols-2 gap-3">
+              <div>
+                <label className="text-xs font-medium text-dark-300 mb-1 block">作业重做次数</label>
+                <input type="number" min={0} max={200} value={form.cxWorkRetake}
+                  onChange={e => setForm({ ...form, cxWorkRetake: Number(e.target.value) })} className="input-field" />
+                <p className="text-[11px] text-dark-400 mt-0.5">0 = 不重做</p>
+              </div>
+              <div>
+                <label className="text-xs font-medium text-dark-300 mb-1 block">阈值（得分率%）</label>
+                <input type="number" min={0} max={100} value={form.cxRetakeRate}
+                  onChange={e => setForm({ ...form, cxRetakeRate: Number(e.target.value) })} className="input-field" />
+                <p className="text-[11px] text-dark-400 mt-0.5">低于该分数才重做，默认 80</p>
+              </div>
+            </div>
+          </div>
+
           <div>
-            <label className="text-xs font-medium text-dark-300 mb-1 block">只刷课程设定</label>
+            <div className="flex items-center justify-between mb-1">
+              <label className="text-xs font-medium text-dark-300">只刷课程设定</label>
+              <button onClick={() => openCoursePicker('include')} className="text-[11px] font-medium text-accent-400 hover:text-accent-300 flex items-center gap-1">
+                <Search size={11} /> 一键查询课程
+              </button>
+            </div>
             <div className="flex gap-2">
               <input type="text" placeholder="输入课程名后回车添加" className="input-field flex-1"
                 onKeyDown={e => { if (e.key === 'Enter') { const target = e.target as HTMLInputElement; const v = target.value.trim(); if (v && !form.includeCourses.includes(v)) setForm({ ...form, includeCourses: [...form.includeCourses, v] }); target.value = '' } }} />
@@ -271,7 +459,12 @@ const AccountFormFields: React.FC<{
             )}
           </div>
           <div>
-            <label className="text-xs font-medium text-dark-300 mb-1 block">排除课程设定</label>
+            <div className="flex items-center justify-between mb-1">
+              <label className="text-xs font-medium text-dark-300">排除课程设定</label>
+              <button onClick={() => openCoursePicker('exclude')} className="text-[11px] font-medium text-accent-400 hover:text-accent-300 flex items-center gap-1">
+                <Search size={11} /> 一键查询课程
+              </button>
+            </div>
             <div className="flex gap-2">
               <input type="text" placeholder="输入课程名后回车添加" className="input-field flex-1"
                 onKeyDown={e => { if (e.key === 'Enter') { const target = e.target as HTMLInputElement; const v = target.value.trim(); if (v && !form.excludeCourses.includes(v)) setForm({ ...form, excludeCourses: [...form.excludeCourses, v] }); target.value = '' } }} />
@@ -289,6 +482,79 @@ const AccountFormFields: React.FC<{
           </div>
         </motion.div>
       )}
+
+      {coursePicker && (
+        <div className="fixed inset-0 z-[60] flex items-center justify-center bg-black/70 backdrop-blur-sm px-4">
+          <div className="surface-card w-[620px] max-h-[82vh] flex flex-col overflow-hidden">
+            <div className="flex items-center justify-between px-5 py-4 border-b border-dark-700">
+              <div>
+                <h3 className="text-base font-semibold text-dark-50">
+                  {coursePicker === 'include' ? '选择要刷的课程' : '选择要排除的课程'}
+                </h3>
+                <p className="text-[11px] text-dark-400 mt-0.5">勾选后将覆盖当前列表；支持搜索课程名</p>
+              </div>
+              <button onClick={() => setCoursePicker(null)} className="text-dark-400 hover:text-dark-200"><XCircle size={18} /></button>
+            </div>
+
+            <div className="px-5 py-3 border-b border-dark-700">
+              <div className="relative">
+                <Search size={13} className="absolute left-3 top-1/2 -translate-y-1/2 text-dark-400" />
+                <input value={courseKeyword} onChange={(e) => setCourseKeyword(e.target.value)}
+                  placeholder="搜索课程名称" className="input-field pl-9" />
+              </div>
+            </div>
+
+            <div className="flex-1 overflow-y-auto px-3 py-2">
+              {courseLoading && (
+                <div className="py-10 text-center text-sm text-dark-400 flex items-center justify-center gap-2">
+                  <Loader2 size={15} className="animate-spin" /> 正在登录并拉取课程...
+                </div>
+              )}
+              {!courseLoading && visibleCourses.length === 0 && (
+                <div className="py-10 text-center text-sm text-dark-400">
+                  {courseOptions.length === 0 ? '没有获取到课程' : '没有匹配的课程'}
+                </div>
+              )}
+              {!courseLoading && visibleCourses.map((c) => {
+                const checked = courseSelected.has(c.courseName)
+                return (
+                  <button key={c.courseId + c.courseName}
+                    onClick={() => {
+                      setCourseSelected((prev) => {
+                        const next = new Set(prev)
+                        next.has(c.courseName) ? next.delete(c.courseName) : next.add(c.courseName)
+                        return next
+                      })
+                    }}
+                    className="w-full flex items-center gap-3 px-2 py-2.5 rounded-lg hover:bg-dark-800/70 text-left transition-colors">
+                    <span className={cn('w-4 h-4 rounded border flex items-center justify-center shrink-0',
+                      checked ? 'bg-accent-500 border-accent-500 text-dark-950' : 'border-dark-500')}>
+                      {checked && <CheckCircle size={11} />}
+                    </span>
+                    <span className="flex-1 min-w-0 text-sm text-dark-100 truncate">{c.courseName}</span>
+                    {!c.isStart && <span className="badge-neutral shrink-0">未开课</span>}
+                    <span className="text-[11px] font-mono text-dark-400 shrink-0">{Math.round(c.jobRate)}%</span>
+                  </button>
+                )
+              })}
+            </div>
+
+            <div className="flex items-center justify-between px-5 py-3 border-t border-dark-700">
+              <div className="flex items-center gap-3">
+                <span className="text-xs text-dark-400">已选 {courseSelected.size} 门</span>
+                <button
+                  onClick={() => setCourseSelected(new Set(visibleCourses.map((c) => c.courseName)))}
+                  className="text-xs text-accent-400 hover:text-accent-300">全选当前</button>
+                <button onClick={() => setCourseSelected(new Set())} className="text-xs text-dark-400 hover:text-dark-200">清空</button>
+              </div>
+              <div className="flex items-center gap-2">
+                <button onClick={() => setCoursePicker(null)} className="btn-secondary">取消</button>
+                <button onClick={confirmCoursePicker} className="btn-primary">应用选择</button>
+              </div>
+            </div>
+          </div>
+        </div>
+      )}
     </>
   )
 }
@@ -297,11 +563,20 @@ const AddAccountModal: React.FC<{ open: boolean; onClose: () => void }> = ({ ope
   const { addAccount } = useAppStore()
   const [form, setForm] = useState<AccountFormData>(defaultForm)
   const [loading, setLoading] = useState(false)
-  const [showAdvanced, setShowAdvanced] = useState(false)
+  const [showAdvanced, setShowAdvanced] = useState(true)
+  const [step, setStep] = useState(0)
+  const [direction, setDirection] = useState(1)
 
   useEffect(() => {
-    if (open) setForm(defaultForm)
+    if (open) { setForm(defaultForm); setStep(0); setDirection(1) }
   }, [open])
+
+  const go = (next: number) => {
+    setDirection(next > step ? 1 : -1)
+    setStep(next)
+  }
+
+  const canNext = step === 1 ? Boolean(form.account && form.password) : true
 
   const handleSubmit = async () => {
     if (!form.account || !form.password) return
@@ -314,7 +589,16 @@ const AddAccountModal: React.FC<{ open: boolean; onClose: () => void }> = ({ ope
         shuffleSw: form.shuffleSw, studyTime: form.studyTime,
         includeCourses: form.includeCourses.filter(e => e),
         excludeCourses: form.excludeCourses.filter(e => e),
+        selfCheckSw: form.selfCheckSw,
+        selfCheckStartDate: form.selfCheckStartDate,
+        selfCheckEndDate: form.selfCheckEndDate,
+        cxExtendReadSw: form.cxExtendReadSw,
+        cxBbsSw: form.cxBbsSw,
+        cxWorkRetake: form.cxWorkRetake,
+        cxRetakeRate: form.cxRetakeRate,
       },
+      showDocSw: form.showDocSw,
+      showDocUrls: form.showDocUrls.filter(e => e),
       isProxy: form.isProxy ? 1 : 0,
       informEmails: form.informEmails.filter(e => e),
     }
@@ -325,21 +609,127 @@ const AddAccountModal: React.FC<{ open: boolean; onClose: () => void }> = ({ ope
 
   if (!open) return null
 
+  const steps = ['基础信息', '账号密码', '功能配置']
+
   return (
     <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/60 backdrop-blur-sm">
-      <motion.div initial={{ opacity: 0, scale: 0.95 }} animate={{ opacity: 1, scale: 1 }}
-        className="glass-card w-[560px] max-h-[90vh] overflow-y-auto p-6 space-y-4">
-        <div className="flex items-center justify-between">
-          <h3 className="text-lg font-semibold text-dark-50">添加账号</h3>
+      <motion.div initial={{ opacity: 0, scale: 0.96 }} animate={{ opacity: 1, scale: 1 }}
+        className="glass-card w-[600px] max-h-[90vh] overflow-y-auto p-6">
+        <div className="flex items-center justify-between mb-4">
+          <div>
+            <h3 className="text-lg font-semibold text-dark-50">添加账号</h3>
+            <p className="text-xs text-dark-400 mt-0.5">第 {step + 1} / {steps.length} 步 · {steps[step]}</p>
+          </div>
           <button onClick={onClose} className="text-dark-400 hover:text-dark-200"><XCircle size={20} /></button>
         </div>
-        <AccountFormFields form={form} setForm={setForm} showAdvanced={showAdvanced} setShowAdvanced={setShowAdvanced} />
-        <div className="flex justify-end gap-3 pt-2">
-          <button onClick={onClose} className="btn-secondary">取消</button>
-          <button onClick={handleSubmit} disabled={loading || !form.account || !form.password}
-            className={cn("btn-primary", (loading || !form.account || !form.password) && "opacity-50 cursor-not-allowed")}>
-            {loading ? '添加中...' : '确认添加'}
+
+        <div className="flex items-center gap-2 mb-5">
+          {steps.map((label, i) => (
+            <React.Fragment key={label}>
+              <div className="flex items-center gap-1.5">
+                <span className={cn('step-dot', i === step && 'step-dot-active', i < step && 'step-dot-done')} />
+                <span className={cn('text-[11px]', i === step ? 'text-accent-400' : 'text-dark-400')}>{label}</span>
+              </div>
+              {i < steps.length - 1 && <div className={cn('h-px flex-1', i < step ? 'bg-accent-700' : 'bg-dark-700')} />}
+            </React.Fragment>
+          ))}
+        </div>
+
+        <div className="relative overflow-hidden min-h-[240px]">
+          <AnimatePresence mode="wait" initial={false}>
+            {step === 0 && (
+              <motion.div key="step0"
+                initial={{ opacity: 0, x: direction > 0 ? 32 : -32 }}
+                animate={{ opacity: 1, x: 0 }}
+                exit={{ opacity: 0, x: direction > 0 ? -32 : 32 }}
+                transition={{ duration: 0.24, ease: [0.22, 1, 0.36, 1] }}
+                className="space-y-4">
+                <div>
+                  <label className="text-xs font-medium text-dark-300 mb-1 block">平台类型</label>
+                  <select value={form.accountType} onChange={e => {
+                    const newType = e.target.value
+                    const modes = getVideoModes(newType)
+                    const validMode = modes.find(m => m.value === form.videoModel) ? form.videoModel : modes[Math.min(1, modes.length - 1)].value
+                    setForm({ ...form, accountType: newType, videoModel: validMode })
+                  }} className="select-field">
+                    {PLATFORM_LIST.map(p => <option key={p.id} value={p.id}>{p.icon} {p.name}</option>)}
+                  </select>
+                </div>
+                <div>
+                  <label className="text-xs font-medium text-dark-300 mb-1 block">备注名</label>
+                  <input type="text" autoFocus value={form.remarkName} onChange={e => setForm({ ...form, remarkName: e.target.value })}
+                    onKeyDown={e => { if (e.key === 'Enter') go(1) }}
+                    placeholder="例如：主账号 / 小号，方便识别" className="input-field" />
+                  <p className="text-[11px] text-dark-400 mt-1">设置一个易识别的备注，后续质检与刷课列表会优先显示</p>
+                </div>
+              </motion.div>
+            )}
+
+            {step === 1 && (
+              <motion.div key="step1"
+                initial={{ opacity: 0, x: direction > 0 ? 32 : -32 }}
+                animate={{ opacity: 1, x: 0 }}
+                exit={{ opacity: 0, x: direction > 0 ? -32 : 32 }}
+                transition={{ duration: 0.24, ease: [0.22, 1, 0.36, 1] }}
+                className="space-y-4">
+                <div>
+                  <label className="text-xs font-medium text-dark-300 mb-1 block">账号</label>
+                  <input type="text" autoFocus value={form.account} onChange={e => setForm({ ...form, account: e.target.value })}
+                    placeholder="请输入账号 / 手机号" className="input-field" />
+                </div>
+                <div>
+                  <label className="text-xs font-medium text-dark-300 mb-1 block">密码 / Cookie</label>
+                  <input type="password" value={form.password} onChange={e => setForm({ ...form, password: e.target.value })}
+                    onKeyDown={e => { if (e.key === 'Enter' && canNext) go(2) }}
+                    placeholder="请输入密码或 Cookie" className="input-field" />
+                </div>
+                {['YINGHUA', 'CANGHUI', 'HQKJ'].includes(form.accountType) && (
+                  <div>
+                    <label className="text-xs font-medium text-dark-300 mb-1 block">平台 URL</label>
+                    <input type="text" value={form.url} onChange={e => setForm({ ...form, url: e.target.value })}
+                      placeholder="https://example.com" className="input-field" />
+                  </div>
+                )}
+              </motion.div>
+            )}
+
+            {step === 2 && (
+              <motion.div key="step2"
+                initial={{ opacity: 0, x: direction > 0 ? 32 : -32 }}
+                animate={{ opacity: 1, x: 0 }}
+                exit={{ opacity: 0, x: direction > 0 ? -32 : 32 }}
+                transition={{ duration: 0.24, ease: [0.22, 1, 0.36, 1] }}
+                className="space-y-4">
+                <div className="surface-sub p-3 flex items-center gap-3">
+                  <div className="w-9 h-9 rounded-xl bg-accent-500/15 text-accent-400 flex items-center justify-center font-semibold">
+                    {(form.remarkName || form.account || '?').slice(0, 1).toUpperCase()}
+                  </div>
+                  <div className="min-w-0">
+                    <div className="text-sm text-dark-100 truncate">{form.remarkName || '未设置备注'}</div>
+                    <div className="text-[11px] text-dark-400 truncate">{getPlatformName(form.accountType)} · {form.account}</div>
+                  </div>
+                </div>
+                <AccountFormFields form={form} setForm={setForm} showAdvanced={showAdvanced} setShowAdvanced={setShowAdvanced} hideIdentity />
+              </motion.div>
+            )}
+          </AnimatePresence>
+        </div>
+
+        <div className="flex items-center justify-between pt-5">
+          <button onClick={() => (step === 0 ? onClose() : go(step - 1))} className="btn-secondary">
+            {step === 0 ? '取消' : '上一步'}
           </button>
+          {step < 2 ? (
+            <button onClick={() => go(step + 1)} disabled={!canNext}
+              className={cn('btn-primary', !canNext && 'opacity-50 cursor-not-allowed')}>
+              下一步
+            </button>
+          ) : (
+            <button onClick={handleSubmit} disabled={loading || !form.account || !form.password}
+              className={cn('btn-primary', (loading || !form.account || !form.password) && 'opacity-50 cursor-not-allowed')}>
+              {loading ? '添加中...' : '确认添加'}
+            </button>
+          )}
         </div>
       </motion.div>
     </div>
@@ -386,6 +776,15 @@ const EditAccountModal: React.FC<{ open: boolean; onClose: () => void; account: 
         studyTime: cc.studyTime || '',
         includeCourses: Array.isArray(cc.includeCourses) ? cc.includeCourses : [],
         excludeCourses: Array.isArray(cc.excludeCourses) ? cc.excludeCourses : [],
+        selfCheckSw: cc.selfCheckSw ?? 0,
+        selfCheckStartDate: cc.selfCheckStartDate || '',
+        selfCheckEndDate: cc.selfCheckEndDate || '',
+        showDocSw: parsed.showDocSw ?? 0,
+        showDocUrls: Array.isArray(parsed.showDocUrls) ? parsed.showDocUrls : [],
+        cxExtendReadSw: cc.cxExtendReadSw ?? 1,
+        cxBbsSw: cc.cxBbsSw ?? 0,
+        cxWorkRetake: cc.cxWorkRetake ?? 0,
+        cxRetakeRate: cc.cxRetakeRate ?? 80,
       })
     }
   }, [open, account])
@@ -406,7 +805,16 @@ const EditAccountModal: React.FC<{ open: boolean; onClose: () => void; account: 
         shuffleSw: form.shuffleSw, studyTime: form.studyTime,
         includeCourses: form.includeCourses.filter(e => e),
         excludeCourses: form.excludeCourses.filter(e => e),
+        selfCheckSw: form.selfCheckSw,
+        selfCheckStartDate: form.selfCheckStartDate,
+        selfCheckEndDate: form.selfCheckEndDate,
+        cxExtendReadSw: form.cxExtendReadSw,
+        cxBbsSw: form.cxBbsSw,
+        cxWorkRetake: form.cxWorkRetake,
+        cxRetakeRate: form.cxRetakeRate,
       },
+      showDocSw: form.showDocSw,
+      showDocUrls: form.showDocUrls.filter(e => e),
       isProxy: form.isProxy ? 1 : 0,
       informEmails: form.informEmails.filter(e => e),
     }
@@ -425,7 +833,7 @@ const EditAccountModal: React.FC<{ open: boolean; onClose: () => void; account: 
           <h3 className="text-lg font-semibold text-dark-50">编辑账号</h3>
           <button onClick={onClose} className="text-dark-400 hover:text-dark-200"><XCircle size={20} /></button>
         </div>
-        <AccountFormFields form={form} setForm={setForm} showAdvanced={showAdvanced} setShowAdvanced={setShowAdvanced} isEdit />
+        <AccountFormFields form={form} setForm={setForm} showAdvanced={showAdvanced} setShowAdvanced={setShowAdvanced} isEdit courseSourceUid={account.uid} />
         <div className="flex justify-end gap-3 pt-2">
           <button onClick={onClose} className="btn-secondary">取消</button>
           <button onClick={handleSubmit} disabled={loading}
@@ -651,7 +1059,7 @@ const AccountsPage: React.FC = () => {
                           ? "bg-accent-600 border-accent-600"
                           : "border-dark-600 hover:border-dark-400"
                       )}>
-                      {selectedUids.has(account.uid) && <CheckCircle size={14} className="text-white" />}
+                      {selectedUids.has(account.uid) && <CheckCircle size={14} className="text-dark-950" />}
                     </button>
                   )}
 

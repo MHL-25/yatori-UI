@@ -5,10 +5,14 @@ import (
 	_ "embed"
 	"encoding/json"
 	"log"
+	"math/rand"
 	"os"
 	"path/filepath"
+	"strconv"
 	"sync"
 	"time"
+	"yatori-UI/internal/activity"
+	"yatori-UI/internal/checker"
 	"yatori-UI/internal/config"
 	"yatori-UI/internal/dao"
 	"yatori-UI/internal/entity"
@@ -25,13 +29,15 @@ import (
 var trayIconData []byte
 
 type App struct {
-	ctx        context.Context
-	notified   map[string]time.Time
-	notifiedMu sync.Mutex
-	shouldQuit bool
+	ctx          context.Context
+	notified     map[string]time.Time
+	notifiedMu   sync.Mutex
+	shouldQuit   bool
+	donatePrompt bool
+	launchCount  int
 }
 
-const AppVersion = "1.1.3"
+const AppVersion = "1.2.1"
 
 func NewApp() *App {
 	return &App{notified: make(map[string]time.Time)}
@@ -68,6 +74,8 @@ func (a *App) startup(ctx context.Context) {
 	}
 
 	utils.YatoriCoreInit()
+
+	a.recordLaunch()
 
 	go a.initSystray()
 
@@ -125,6 +133,179 @@ func (a *App) startup(ctx context.Context) {
 	})
 
 	go a.watchConfigFile()
+
+	// 启动自动化：按账号自检时间窗决定是否质检/续刷
+	go a.startupAutomation()
+}
+
+// startupAutomation 启动后按账号自检时间窗执行质检与自动刷课
+func (a *App) startupAutomation() {
+	time.Sleep(3 * time.Second)
+	cfg := config.EnsureConfigFile("./config.yaml")
+	users, err := dao.QueryAllUsers()
+	if err != nil {
+		return
+	}
+	autoCheck := cfg.Setting.BasicSetting.AutoCheckSw == 1
+	autoStart := cfg.Setting.BasicSetting.AutoStartSw == 1
+	if !autoCheck && !autoStart {
+		return
+	}
+	for _, u := range users {
+		var userCfg config.User
+		_ = json.Unmarshal([]byte(u.UserConfigJson), &userCfg)
+		ok, reason := config.InSelfCheckWindow(userCfg, time.Now())
+		if !ok {
+			monitor.GlobalEventBus.AddLog(u.Uid, "⏰ 跳过自动任务："+reason)
+			continue
+		}
+		monitor.GlobalEventBus.AddLog(u.Uid, "⏰ 自检时间窗校验通过："+reason)
+
+		var report *entity.CheckReport
+		if autoCheck {
+			report, err = checker.Check(u.Uid, cfg.Setting)
+			if err != nil {
+				monitor.GlobalEventBus.AddLog(u.Uid, "❌ 自动质检失败: "+err.Error())
+				continue
+			}
+		}
+		if !autoStart {
+			continue
+		}
+		if report != nil && report.PendingCourses == 0 && report.CompletedCourses == report.TotalCourses {
+			monitor.GlobalEventBus.AddLog(u.Uid, "✅ 所有课程已完成，无需自动刷课")
+			continue
+		}
+		if err := service.StartBrush(u.Uid); err != nil {
+			monitor.GlobalEventBus.AddLog(u.Uid, "自动刷课未启动: "+err.Error())
+		}
+	}
+	go a.watchCourseLocks()
+}
+
+// watchCourseLocks 每分钟检查定时开放节点，到点自动续刷对应账号
+func (a *App) watchCourseLocks() {
+	ticker := time.NewTicker(time.Minute)
+	defer ticker.Stop()
+	for {
+		select {
+		case <-a.ctx.Done():
+			return
+		case <-ticker.C:
+			locks, err := dao.QueryDueCourseLocks(time.Now())
+			if err != nil || len(locks) == 0 {
+				continue
+			}
+			for _, lock := range locks {
+				user, err := dao.QueryUserByUid(lock.Uid)
+				if err != nil || user == nil {
+					_ = dao.MarkCourseLockHandled(lock.ID)
+					continue
+				}
+				var userCfg config.User
+				_ = json.Unmarshal([]byte(user.UserConfigJson), &userCfg)
+				if ok, reason := config.InSelfCheckWindow(userCfg, time.Now()); !ok {
+					monitor.GlobalEventBus.AddLog(lock.Uid, "⏰ 定时开放已到达，但不在自检时间窗："+reason)
+					continue
+				}
+				_ = dao.MarkCourseLockHandled(lock.ID)
+				if act := activity.GetActivity(lock.Uid); act != nil && act.IsRunning() {
+					continue
+				}
+				monitor.GlobalEventBus.AddLog(lock.Uid, "🕒 课程 ["+lock.CourseName+"] 节点 ["+lock.Label+" "+lock.NodeName+"] 已到开放时间，自动续刷")
+				if err := service.StartBrush(lock.Uid); err != nil {
+					monitor.GlobalEventBus.AddLog(lock.Uid, "自动续刷未启动: "+err.Error())
+				}
+			}
+		}
+	}
+}
+
+func (a *App) CheckAccount(uid string) string {
+	report, err := service.CheckAccount(uid)
+	if err != nil {
+		jsonData, _ := json.Marshal(entity.ErrorResponse(err.Error()))
+		return string(jsonData)
+	}
+	jsonData, _ := json.Marshal(entity.SuccessResponse("OK", report))
+	return string(jsonData)
+}
+
+func (a *App) CheckAccounts(jsonUids string) string {
+	var uids []string
+	if err := json.Unmarshal([]byte(jsonUids), &uids); err != nil {
+		jsonData, _ := json.Marshal(entity.ErrorResponse("Parse error: "+err.Error()))
+		return string(jsonData)
+	}
+	reports := service.CheckAccounts(uids)
+	jsonData, _ := json.Marshal(entity.SuccessResponse("OK", reports))
+	return string(jsonData)
+}
+
+func (a *App) CheckAllAccounts() string {
+	reports := service.CheckAllAccounts()
+	jsonData, _ := json.Marshal(entity.SuccessResponse("OK", reports))
+	return string(jsonData)
+}
+
+func (a *App) GetCheckReports() string {
+	reports := service.GetStoredCheckReports()
+	jsonData, _ := json.Marshal(entity.SuccessResponse("OK", reports))
+	return string(jsonData)
+}
+
+func (a *App) GetCourseLocks(uid string) string {
+	locks, err := service.GetCourseLocks(uid)
+	if err != nil {
+		jsonData, _ := json.Marshal(entity.ErrorResponse(err.Error()))
+		return string(jsonData)
+	}
+	jsonData, _ := json.Marshal(entity.SuccessResponse("OK", locks))
+	return string(jsonData)
+}
+
+func (a *App) GetCourseList(uid string) string {
+	courses, err := service.GetCourseList(uid)
+	if err != nil {
+		jsonData, _ := json.Marshal(entity.ErrorResponse(err.Error()))
+		return string(jsonData)
+	}
+	jsonData, _ := json.Marshal(entity.SuccessResponse("OK", courses))
+	return string(jsonData)
+}
+
+// recordLaunch 记录软件打开次数，并按伪随机概率决定是否弹出赞助提示
+func (a *App) recordLaunch() {
+	count, _ := strconv.Atoi(dao.GetSetting("launch_count"))
+	count++
+	a.launchCount = count
+	_ = dao.SetSetting("launch_count", strconv.Itoa(count))
+
+	if dao.GetSetting("sponsor_dismissed") == "true" {
+		return
+	}
+	last, _ := strconv.Atoi(dao.GetSetting("sponsor_last_prompt"))
+	r := rand.New(rand.NewSource(time.Now().UnixNano()))
+	if count >= 5 && count-last >= 5 && r.Intn(100) < 20 {
+		a.donatePrompt = true
+		_ = dao.SetSetting("sponsor_last_prompt", strconv.Itoa(count))
+	}
+}
+
+// GetDonatePrompt 返回本次启动是否展示赞助提示
+func (a *App) GetDonatePrompt() string {
+	resp := entity.SuccessResponse("OK", map[string]interface{}{
+		"show":  a.donatePrompt,
+		"count": a.launchCount,
+	})
+	jsonData, _ := json.Marshal(resp)
+	return string(jsonData)
+}
+
+// DisableDonatePrompt 用户选择“不再提示”
+func (a *App) DisableDonatePrompt() {
+	_ = dao.SetSetting("sponsor_dismissed", "true")
+	a.donatePrompt = false
 }
 
 func (a *App) initSystray() {
@@ -215,12 +396,18 @@ func (a *App) watchConfigFile() {
 					if user.CoursesCustom.CxExamSw != nil {
 						ccData.CxExamSw = *user.CoursesCustom.CxExamSw
 					}
+					ccData.CxExtendReadSw = user.CoursesCustom.CxExtendReadSw
+					ccData.CxBbsSw = user.CoursesCustom.CxBbsSw
+					ccData.CxWorkRetake = user.CoursesCustom.CxWorkRetake
+					ccData.CxRetakeRate = user.CoursesCustom.CxRetakeRate
 						req := entity.AddAccountRequest{
 							AccountType:   user.AccountType,
 							Url:           user.URL,
 							RemarkName:    user.RemarkName,
 							Account:       user.Account,
 							Password:      user.Password,
+							ShowDocSw:     user.ShowDocSw,
+							ShowDocUrls:   user.ShowDocUrls,
 							CoursesCustom: ccData,
 						}
 						service.AddAccount(req)

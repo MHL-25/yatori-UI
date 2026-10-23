@@ -12,9 +12,12 @@ import (
 	"time"
 
 	"yatori-UI/internal/config"
+	"yatori-UI/internal/dao"
 	"yatori-UI/internal/entity"
 	"yatori-UI/internal/email"
 	"yatori-UI/internal/monitor"
+	"yatori-UI/internal/notify"
+	"yatori-UI/internal/studyplan"
 
 	"github.com/thedevsaddam/gojsonq"
 	"github.com/yatori-dev/yatori-go-core/aggregation/cqie"
@@ -114,10 +117,17 @@ func (u *UserActivityBase) setPaused(paused bool) {
 func (u *UserActivityBase) sendCompletionEmail() {
 	setting := u.Setting
 	user := u.User
+	platformName := config.PlatformNames[user.AccountType]
+	content := fmt.Sprintf("账号：[%s]</br>平台：[%s]</br>通知：所有课程已执行完毕", user.Account, platformName)
 	if setting.EmailInform.Sw == 1 && len(user.InformEmails) > 0 {
-		platformName := config.PlatformNames[user.AccountType]
-		content := fmt.Sprintf("账号：[%s]</br>平台：[%s]</br>通知：所有课程已执行完毕", user.Account, platformName)
 		go email.SendMail(setting.EmailInform.SMTPHost, setting.EmailInform.SMTPPort, setting.EmailInform.UserName, setting.EmailInform.Password, user.InformEmails, content)
+	}
+	if user.ShowDocSw == 1 && len(user.ShowDocUrls) > 0 {
+		go func() {
+			if err := notify.SendShowDoc(user.ShowDocUrls, "Yatori课程助手通知", content); err != nil {
+				monitor.GlobalEventBus.AddLog(u.Uid, "⚠️ ShowDoc 推送失败: "+err.Error())
+			}
+		}()
 	}
 }
 
@@ -277,13 +287,45 @@ func (a *XXTActivity) run() {
 
 	completedCourses := 0
 	var nodesLock sync.WaitGroup
+
+	// 多任务点模式：刷课前先扫描各课程的限制情况，受限课程单独开 goroutine，避免拖慢整体进度
+	scans := make(map[string]*courseScan)
+	if user.CoursesCustom.VideoModel == 3 {
+		monitor.GlobalEventBus.AddLog(a.Uid, "🔎 预扫描课程限制（前置任务/定时开放）...")
+		for i := range courseList {
+			if !a.IsRunning() {
+				break
+			}
+			course := courseList[i]
+			if course.JobRate >= 100 || course.State == 1 || !course.IsStart {
+				continue
+			}
+			if s, err := a.scanCourse(cache, &course); err != nil {
+				monitor.GlobalEventBus.AddLog(a.Uid, "⚠️ 预扫描失败: "+course.CourseName+" - "+err.Error())
+			} else {
+				scans[course.CourseID] = s
+			}
+		}
+	}
+
 	for _, course := range courseList {
 		if !a.IsRunning() {
 			break
 		}
 		completedCourses++
 		monitor.GlobalEventBus.UpdateCourseProgress(a.Uid, completedCourses, totalCourses)
-		if user.CoursesCustom.VideoModel == 1 || user.CoursesCustom.VideoModel == 3 {
+		if user.CoursesCustom.VideoModel == 3 {
+			if s := scans[course.CourseID]; s != nil && studyplan.Restricted(s.plans) {
+				monitor.GlobalEventBus.AddLog(a.Uid, "🔒 受限课程单独调度: "+course.CourseName)
+				nodesLock.Add(1)
+				go func(course xuexitong.XueXiTCourse, scan *courseScan) {
+					defer nodesLock.Done()
+					a.courseStudyWithScan(&course, scan)
+				}(course, s)
+				continue
+			}
+			a.courseStudy(&course)
+		} else if user.CoursesCustom.VideoModel == 1 {
 			a.courseStudy(&course)
 		} else {
 			nodesLock.Add(1)
@@ -297,7 +339,47 @@ func (a *XXTActivity) run() {
 	monitor.GlobalEventBus.AddLog(a.Uid, "✅ 所有待学习课程学习完毕")
 }
 
+// courseScan 单门课程的章节与限制扫描结果
+type courseScan struct {
+	chapters xuexitong.ChaptersList
+	points   xuexitong.ChaptersList
+	plans    []studyplan.NodePlan
+}
+
+// scanCourse 拉取课程章节与任务点状态并分析锁类型
+func (a *XXTActivity) scanCourse(cache *xuexitongApi.XueXiTUserCache, courseItem *xuexitong.XueXiTCourse) (*courseScan, error) {
+	key, _ := strconv.Atoi(courseItem.Key)
+	action, _, err := xuexitong.PullCourseChapterAction(cache, courseItem.Cpi, key)
+	if err != nil {
+		return nil, err
+	}
+	var nodes []int
+	for _, item := range action.Knowledge {
+		if item.Layer == 2 && item.JobCount > 0 {
+			nodes = append(nodes, item.ID)
+		}
+	}
+	if len(nodes) == 0 {
+		return &courseScan{chapters: action}, nil
+	}
+	courseId, _ := strconv.Atoi(courseItem.CourseID)
+	userId, _ := strconv.Atoi(cache.UserID)
+	points, err := xuexitong.ChapterFetchPointAction(cache, nodes, &action, key, userId, courseItem.Cpi, courseId)
+	if err != nil {
+		return nil, err
+	}
+	return &courseScan{
+		chapters: action,
+		points:   points,
+		plans:    studyplan.Analyze(points.Knowledge, time.Now()),
+	}, nil
+}
+
 func (a *XXTActivity) courseStudy(courseItem *xuexitong.XueXiTCourse) bool {
+	return a.courseStudyWithScan(courseItem, nil)
+}
+
+func (a *XXTActivity) courseStudyWithScan(courseItem *xuexitong.XueXiTCourse, scan *courseScan) bool {
 	if !a.IsRunning() {
 		return false
 	}
@@ -321,30 +403,50 @@ func (a *XXTActivity) courseStudy(courseItem *xuexitong.XueXiTCourse) bool {
 	monitor.GlobalEventBus.AddLog(a.Uid, "📖 开始学习课程: "+courseItem.CourseName)
 	monitor.GlobalEventBus.UpdateProgress(a.Uid, 0, "学习: "+courseItem.CourseName)
 
-	a.chapterStudy(setting, cache, courseItem)
+	a.chapterStudy(setting, cache, courseItem, scan)
+	a.quizStudy(setting, cache, courseItem)
+	a.extendReadStudy(setting, cache, courseItem)
+	a.discussionStudy(setting, cache, courseItem)
 	a.writeCourseWorkAndExam(setting, cache, courseItem)
 	monitor.GlobalEventBus.AddLog(a.Uid, "✅ 课程学习完毕: "+courseItem.CourseName)
 	return true
 }
 
-func (a *XXTActivity) chapterStudy(setting config.Setting, cache *xuexitongApi.XueXiTUserCache, courseItem *xuexitong.XueXiTCourse) {
+func (a *XXTActivity) chapterStudy(setting config.Setting, cache *xuexitongApi.XueXiTUserCache, courseItem *xuexitong.XueXiTCourse, scan *courseScan) {
 	if courseItem.JobRate >= 100 || courseItem.State == 1 {
 		monitor.GlobalEventBus.AddLog(a.Uid, "⏭️ 课程已完成，跳过: "+courseItem.CourseName)
 		return
 	}
 	user := a.User
 	key, _ := strconv.Atoi(courseItem.Key)
-	action, _, err := xuexitong.PullCourseChapterAction(cache, courseItem.Cpi, key)
-	if err != nil {
-		monitor.GlobalEventBus.AddLog(a.Uid, "⚠️ 拉取章节失败: "+err.Error())
-		return
-	}
 
-	if user.CoursesCustom.ShuffleSw == 1 {
-		rand.Seed(time.Now().UnixNano())
-		rand.Shuffle(len(action.Knowledge), func(i, j int) {
-			action.Knowledge[i], action.Knowledge[j] = action.Knowledge[j], action.Knowledge[i]
-		})
+	var action, pointAction xuexitong.ChaptersList
+	courseId, _ := strconv.Atoi(courseItem.CourseID)
+	userId, _ := strconv.Atoi(cache.UserID)
+
+	if scan != nil {
+		action = scan.chapters
+		pointAction = scan.points
+	} else {
+		var err error
+		action, _, err = xuexitong.PullCourseChapterAction(cache, courseItem.Cpi, key)
+		if err != nil {
+			monitor.GlobalEventBus.AddLog(a.Uid, "⚠️ 拉取章节失败: "+err.Error())
+			return
+		}
+		if len(action.Knowledge) == 0 {
+			monitor.GlobalEventBus.AddLog(a.Uid, "⏭️ 该课程章节为空，已自动跳过")
+			return
+		}
+		var nodes []int
+		for _, item := range action.Knowledge {
+			nodes = append(nodes, item.ID)
+		}
+		pointAction, err = xuexitong.ChapterFetchPointAction(cache, nodes, &action, key, userId, courseItem.Cpi, courseId)
+		if err != nil {
+			monitor.GlobalEventBus.AddLog(a.Uid, "⚠️ 获取任务点失败: "+err.Error())
+			return
+		}
 	}
 
 	if len(action.Knowledge) == 0 {
@@ -352,19 +454,23 @@ func (a *XXTActivity) chapterStudy(setting config.Setting, cache *xuexitongApi.X
 		return
 	}
 
+	plans := studyplan.Analyze(pointAction.Knowledge, time.Now())
+
+	// 定时锁写入数据库，供启动/定时扫描自动续刷
+	a.persistTimeLocks(courseItem, plans)
+
+	if !studyplan.Restricted(plans) && user.CoursesCustom.ShuffleSw == 1 {
+		rand.Seed(time.Now().UnixNano())
+		rand.Shuffle(len(action.Knowledge), func(i, j int) {
+			action.Knowledge[i], action.Knowledge[j] = action.Knowledge[j], action.Knowledge[i]
+		})
+	}
+
 	monitor.GlobalEventBus.AddLog(a.Uid, fmt.Sprintf("📑 获取到 %d 个章节", len(action.Knowledge)))
 
 	var nodes []int
 	for _, item := range action.Knowledge {
 		nodes = append(nodes, item.ID)
-	}
-
-	courseId, _ := strconv.Atoi(courseItem.CourseID)
-	userId, _ := strconv.Atoi(cache.UserID)
-	pointAction, err := xuexitong.ChapterFetchPointAction(cache, nodes, &action, key, userId, courseItem.Cpi, courseId)
-	if err != nil {
-		monitor.GlobalEventBus.AddLog(a.Uid, "⚠️ 获取任务点失败: "+err.Error())
-		return
 	}
 
 	isFinished := func(index int) bool {
@@ -378,10 +484,21 @@ func (a *XXTActivity) chapterStudy(setting config.Setting, cache *xuexitongApi.X
 		return i.PointTotal >= 0 && i.PointTotal == i.PointFinished
 	}
 
+	// 含限制的课程：本课程内改为逐节点串行，不影响其他课程的并发
+	if studyplan.Restricted(plans) {
+		a.studyNodesSerial(setting, cache, courseItem, action, pointAction, plans, key, courseId)
+		return
+	}
+
 	if user.CoursesCustom.VideoModel == 3 {
 		nodeNum := len(nodes)
 		if user.CoursesCustom.CxNode != nil && *user.CoursesCustom.CxNode > 0 && *user.CoursesCustom.CxNode < nodeNum {
 			nodeNum = *user.CoursesCustom.CxNode
+		}
+		// 采纳 Python 版并发调度思路：按 CPU 核数限制并发上限，避免资源过载
+		if tuned := studyplan.AutoConcurrency(nodeNum); tuned < nodeNum {
+			nodeNum = tuned
+			monitor.GlobalEventBus.AddLog(a.Uid, fmt.Sprintf("🧠 根据 CPU 核数调整并发为 %d", nodeNum))
 		}
 		var model3Caches []*xuexitongApi.XueXiTUserCache
 		for i := 0; i < nodeNum; i++ {
@@ -422,18 +539,319 @@ func (a *XXTActivity) chapterStudy(setting config.Setting, cache *xuexitongApi.X
 			}(idx, index)
 		}
 		nodeLock.Wait()
-	} else {
-		for index := range nodes {
+		return
+	}
+
+	for index := range nodes {
+		if !a.IsRunning() {
+			return
+		}
+		if isFinished(index) {
+			continue
+		}
+		a.nodeRun(setting, cache, courseItem, pointAction, action, nodes, index, key, courseId)
+	}
+}
+
+// quizStudy 互动测验（视频弹题）补齐。
+// 借鉴 yatori-python-console 的 interactive_quiz 流程：
+// 权威未完成清单 → 章节卡片取视频 mid → 弹题时间轴 → AI 作答 → 提交（会话降级重登重试）。
+func (a *XXTActivity) quizStudy(setting config.Setting, cache *xuexitongApi.XueXiTUserCache, courseItem *xuexitong.XueXiTCourse) {
+	if !a.IsRunning() {
+		return
+	}
+	key, _ := strconv.Atoi(courseItem.Key)
+	courseID, _ := strconv.Atoi(courseItem.CourseID)
+	plan, err := xuexitong.PullQuizPlanAction(cache, key, courseID, courseItem.Cpi)
+	if err != nil {
+		monitor.GlobalEventBus.AddLog(a.Uid, "⚠️ 互动测验清单获取失败: "+err.Error())
+		return
+	}
+	if len(plan) == 0 {
+		return
+	}
+	monitor.GlobalEventBus.AddLog(a.Uid, fmt.Sprintf("🎯 [%s] 互动测验待完成视频 %d 个", courseItem.CourseName, len(plan)))
+
+	answered, failed := 0, 0
+	for _, item := range plan {
+		if !a.IsRunning() {
+			return
+		}
+		card, err := cache.FetchChapterCords2Raw(strconv.Itoa(key), courseItem.CourseID, strconv.Itoa(item.KnowledgeID), strconv.Itoa(courseItem.Cpi), 2, nil)
+		if err != nil {
+			continue
+		}
+		mid, objectID, ok := xuexitong.ParseVideoAttachment(card)
+		if !ok {
+			continue
+		}
+		timeline, err := cache.FetchQuizTimelineApi(mid, courseItem.Cpi, key, courseID, 2, nil)
+		if err != nil {
+			continue
+		}
+		quizzes := xuexitong.ParseQuizTimeline(timeline)
+		for _, quiz := range quizzes {
 			if !a.IsRunning() {
 				return
 			}
-			if isFinished(index) {
+			if strings.TrimSpace(quiz.AnswerContent) != "" {
 				continue
 			}
+			answer, err := a.solveQuiz(setting, cache, courseItem, quiz, key)
+			if err != nil {
+				failed++
+				monitor.GlobalEventBus.AddLog(a.Uid, "⚠️ 弹题作答失败: "+err.Error())
+				continue
+			}
+			resp, err := cache.SubmitQuizAnswerApi(key, courseItem.Cpi, objectID, quiz.ResourceID, quiz.MemberInfo, answer, 1, nil)
+			if err != nil {
+				// 会话降级：重登后重试一次
+				xuexitong.ReLogin(cache)
+				resp, err = cache.SubmitQuizAnswerApi(key, courseItem.Cpi, objectID, quiz.ResourceID, quiz.MemberInfo, answer, 1, nil)
+			}
+			if err != nil {
+				failed++
+				monitor.GlobalEventBus.AddLog(a.Uid, "⚠️ 弹题提交失败: "+err.Error())
+			} else if strings.Contains(resp, "\"isRight\":true") || strings.Contains(resp, "\"status\":true") {
+				answered++
+			} else {
+				failed++
+				monitor.GlobalEventBus.AddLog(a.Uid, "⚠️ 弹题提交未确认: "+resp[:min(120, len(resp))])
+			}
+			time.Sleep(studyplan.HumanPause(1600 * time.Millisecond))
+		}
+		time.Sleep(studyplan.HumanPause(900 * time.Millisecond))
+	}
+	if answered > 0 || failed > 0 {
+		monitor.GlobalEventBus.AddLog(a.Uid, fmt.Sprintf("🎯 [%s] 互动测验完成 %d，失败 %d", courseItem.CourseName, answered, failed))
+	}
+}
+
+// solveQuiz 依次尝试外部 AI、学习通内置 AI 作答
+func (a *XXTActivity) solveQuiz(setting config.Setting, cache *xuexitongApi.XueXiTUserCache,
+	courseItem *xuexitong.XueXiTCourse, quiz xuexitong.QuizItem, classID int) (string, error) {
+
+	prompt := xuexitong.BuildQuizPrompt(quiz)
+	messages := aiq.AIChatMessages{Messages: []aiq.Message{aiq.NewTextMessage("user", prompt)}}
+
+	if setting.AiSetting.APIKEY != "" && setting.AiSetting.AiUrl != "" {
+		reply, err := aiq.AggregationAIApi(setting.AiSetting.AiUrl, setting.AiSetting.Model, setting.AiSetting.AiType, messages, setting.AiSetting.APIKEY)
+		if err == nil {
+			if ans, e := xuexitong.NormalizeQuizAnswer(reply); e == nil {
+				return ans, nil
+			}
+		}
+	}
+	reply, err := cache.XueXiTongAIAggregation(strconv.Itoa(classID), courseItem.CourseID, strconv.Itoa(courseItem.Cpi), messages)
+	if err != nil {
+		return "", err
+	}
+	return xuexitong.NormalizeQuizAnswer(reply)
+}
+
+func min(a, b int) int {
+	if a < b {
+		return a
+	}
+	return b
+}
+
+// extendReadStudy 拓展阅读（纯协议）
+func (a *XXTActivity) extendReadStudy(setting config.Setting, cache *xuexitongApi.XueXiTUserCache, courseItem *xuexitong.XueXiTCourse) {
+	if a.User.CoursesCustom.CxExtendReadSw != 1 || !a.IsRunning() {
+		return
+	}
+	count, msg, err := xuexitong.RunExtendReadAction(cache, courseItem.CourseID, courseItem.Key, strconv.Itoa(courseItem.Cpi), 5, 3)
+	if err != nil {
+		monitor.GlobalEventBus.AddLog(a.Uid, "⚠️ 拓展阅读失败: "+err.Error())
+		return
+	}
+	if count > 0 {
+		monitor.GlobalEventBus.AddLog(a.Uid, fmt.Sprintf("📖 [%s] 拓展阅读完成 %d 本", courseItem.CourseName, count))
+	} else if msg != "" {
+		monitor.GlobalEventBus.AddLog(a.Uid, "📖 ["+courseItem.CourseName+"] "+msg)
+	}
+}
+
+// discussionStudy 讨论区全部话题（AI 学生口吻回复）
+func (a *XXTActivity) discussionStudy(setting config.Setting, cache *xuexitongApi.XueXiTUserCache, courseItem *xuexitong.XueXiTCourse) {
+	if a.User.CoursesCustom.CxBbsSw != 1 || !a.IsRunning() {
+		return
+	}
+	topics, bbsid, err := xuexitong.FetchAllTopicsAction(cache, courseItem.CourseID, courseItem.Key, strconv.Itoa(courseItem.Cpi))
+	if err != nil {
+		monitor.GlobalEventBus.AddLog(a.Uid, "⚠️ 讨论区拉取失败: "+err.Error())
+		return
+	}
+	if len(topics) == 0 {
+		return
+	}
+	monitor.GlobalEventBus.AddLog(a.Uid, fmt.Sprintf("💬 [%s] 讨论区共 %d 个话题", courseItem.CourseName, len(topics)))
+	ok, failed := 0, 0
+	for _, t := range topics {
+		if !a.IsRunning() {
+			return
+		}
+		if cache.UserID != "" && t.CreaterID == cache.UserID {
+			continue
+		}
+		reply := a.generateStudentReply(setting, cache, courseItem, t.Content)
+		if reply == "" {
+			continue
+		}
+		success, err := xuexitong.ReplyTopicAction(cache, bbsid, t, reply, courseItem.CourseID, courseItem.Key, strconv.Itoa(courseItem.Cpi))
+		if err != nil {
+			failed++
+		} else if success {
+			ok++
+		}
+		time.Sleep(studyplan.HumanPause(1800 * time.Millisecond))
+	}
+	monitor.GlobalEventBus.AddLog(a.Uid, fmt.Sprintf("💬 [%s] 讨论回复完成 %d，失败 %d", courseItem.CourseName, ok, failed))
+}
+
+// generateStudentReply 生成学生口吻讨论回复
+func (a *XXTActivity) generateStudentReply(setting config.Setting, cache *xuexitongApi.XueXiTUserCache,
+	courseItem *xuexitong.XueXiTCourse, topicContent string) string {
+
+	prompt := fmt.Sprintf("请以一名大学生的身份，针对讨论话题「%s」写一段20-60字的自然口语化回复，直接输出回复正文，不要引号不要解释。", topicContent)
+	messages := aiq.AIChatMessages{Messages: []aiq.Message{aiq.NewTextMessage("user", prompt)}}
+	if setting.AiSetting.APIKEY != "" && setting.AiSetting.AiUrl != "" {
+		if resp, err := aiq.AggregationAIApi(setting.AiSetting.AiUrl, setting.AiSetting.Model, setting.AiSetting.AiType, messages, setting.AiSetting.APIKEY); err == nil {
+			resp = strings.TrimSpace(resp)
+			if len(resp) >= 8 && len(resp) <= 160 {
+				return resp
+			}
+		}
+	}
+	if resp, err := cache.XueXiTongAIAggregation(courseItem.Key, courseItem.CourseID, strconv.Itoa(courseItem.Cpi), messages); err == nil {
+		resp = strings.TrimSpace(resp)
+		if len(resp) >= 8 && len(resp) <= 160 {
+			return resp
+		}
+	}
+	phrases := []string{
+		"学习了这个话题，我深刻认识到青年一代要勇担时代责任，把个人成长融入国家发展之中。",
+		"通过这节课的学习，我更加明白了初心和使命的意义，今后会更加努力学习、积极实践。",
+		"这个话题让我感触很深，历史是最好的教科书，我们要从中汲取前进的力量。",
+		"我认为作为新时代青年，应当脚踏实地、勤学笃行，用实际行动回答时代的问卷。",
+		"学习之后收获很大，立志把爱国之情转化为报国之行，从身边小事做起。",
+	}
+	return phrases[rand.Intn(len(phrases))]
+}
+
+// accountDisplayName 账号展示名称
+func accountDisplayName(user config.User) string {
+	if user.RemarkName != "" {
+		return user.RemarkName
+	}
+	return user.Account
+}
+
+// persistTimeLocks 保存定时开放节点，便于软件启动后自动续刷
+func (a *XXTActivity) persistTimeLocks(courseItem *xuexitong.XueXiTCourse, plans []studyplan.NodePlan) {
+	var locks []entity.CourseLockPO
+	for _, p := range plans {
+		if p.Lock == studyplan.LockTime && !p.UnlockAt.IsZero() {
+			locks = append(locks, entity.CourseLockPO{
+				Uid:         a.Uid,
+				AccountName: accountDisplayName(a.User),
+				CourseID:    courseItem.CourseID,
+				CourseName:  courseItem.CourseName,
+				NodeID:      strconv.Itoa(p.Node.ID),
+				NodeName:    p.Node.Name,
+				Label:       p.Node.Label,
+				UnlockAt:    p.UnlockAt,
+				Reason:      "time",
+			})
+		}
+	}
+	if err := dao.ReplaceCourseLocks(a.Uid, courseItem.CourseID, locks); err != nil {
+		monitor.GlobalEventBus.AddLog(a.Uid, "⚠️ 保存定时开放记录失败: "+err.Error())
+		return
+	}
+	if len(locks) > 0 {
+		monitor.GlobalEventBus.AddLog(a.Uid, fmt.Sprintf("🕒 课程 [%s] 有 %d 个节点待定时开放，已记录", courseItem.CourseName, len(locks)))
+	}
+}
+
+// studyNodesSerial 受限课程逐节点串行学习：先补前置，再重试仍有锁的节点
+func (a *XXTActivity) studyNodesSerial(setting config.Setting, cache *xuexitongApi.XueXiTUserCache,
+	courseItem *xuexitong.XueXiTCourse, action, pointAction xuexitong.ChaptersList,
+	plans []studyplan.NodePlan, key, courseId int) {
+
+	var nodes []int
+	for _, item := range action.Knowledge {
+		nodes = append(nodes, item.ID)
+	}
+
+	// 使用当前快照判断完成状态，刷新后会随 pointAction 一起更新
+	finished := func(index int) bool {
+		if index < 0 || index >= len(pointAction.Knowledge) {
+			return false
+		}
+		i := pointAction.Knowledge[index]
+		if i.PointTotal == 0 && i.PointFinished == 0 {
+			xuexitong.EnterChapterForwardCallAction(cache, strconv.Itoa(courseId), strconv.Itoa(key), strconv.Itoa(i.ID), strconv.Itoa(courseItem.Cpi))
+		}
+		return i.PointTotal >= 0 && i.PointTotal == i.PointFinished
+	}
+
+	monitor.GlobalEventBus.AddLog(a.Uid, "🔒 该课程存在前置/定时限制，已切换为本课程逐节点串行")
+	for pass := 0; pass < 2; pass++ {
+		blocked := false
+		for _, p := range plans {
+			if !a.IsRunning() {
+				return
+			}
+			index := p.Index
+			if index >= len(nodes) {
+				continue
+			}
+			if finished(index) {
+				continue
+			}
+			switch p.Lock {
+			case studyplan.LockTime:
+				monitor.GlobalEventBus.AddLog(a.Uid, fmt.Sprintf("🕒 [%s] %s：%s", p.Node.Label, p.Node.Name, p.Reason))
+				continue
+			case studyplan.LockExpired:
+				monitor.GlobalEventBus.AddLog(a.Uid, fmt.Sprintf("⌛ [%s] %s：%s", p.Node.Label, p.Node.Name, p.Reason))
+				continue
+			case studyplan.LockPrereq:
+				if pass == 0 {
+					blocked = true
+					monitor.GlobalEventBus.AddLog(a.Uid, fmt.Sprintf("⏳ [%s] %s 等待前置任务点完成", p.Node.Label, p.Node.Name))
+					continue
+				}
+			case studyplan.LockClosed:
+				if pass == 0 {
+					blocked = true
+					monitor.GlobalEventBus.AddLog(a.Uid, fmt.Sprintf("⏸️ [%s] %s 暂未开放", p.Node.Label, p.Node.Name))
+					continue
+				}
+			}
 			a.nodeRun(setting, cache, courseItem, pointAction, action, nodes, index, key, courseId)
+			time.Sleep(studyplan.HumanPause(1200 * time.Millisecond))
+		}
+		if !blocked || pass == 1 || !a.IsRunning() {
+			break
+		}
+		// 第一轮结束后刷新章节与任务点状态，再尝试因前置而锁定的节点
+		scan, err := a.scanCourse(cache, courseItem)
+		if err != nil {
+			monitor.GlobalEventBus.AddLog(a.Uid, "⚠️ 刷新章节状态失败: "+err.Error())
+			break
+		}
+		action, pointAction = scan.chapters, scan.points
+		plans = scan.plans
+		nodes = nodes[:0]
+		for _, item := range action.Knowledge {
+			nodes = append(nodes, item.ID)
 		}
 	}
 }
+
 
 func (a *XXTActivity) nodeRun(setting config.Setting, cache *xuexitongApi.XueXiTUserCache, courseItem *xuexitong.XueXiTCourse,
 	pointAction xuexitong.ChaptersList, action xuexitong.ChaptersList, nodes []int, index int, key int, courseId int) {
@@ -987,6 +1405,9 @@ func (a *XXTActivity) chapterTestAction(cache *xuexitongApi.XueXiTUserCache, que
 	setting := a.Setting
 	stopStart := 1
 	stopEnd := 2
+
+	// 拟人化答题停顿，避免固定毫秒级提交节奏
+	time.Sleep(studyplan.AnswerPause())
 
 	for i := range questionAction.Choice {
 		q := &questionAction.Choice[i]

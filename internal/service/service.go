@@ -3,6 +3,7 @@ package service
 import (
 	"encoding/json"
 	"yatori-UI/internal/activity"
+	"yatori-UI/internal/checker"
 	"yatori-UI/internal/config"
 	"yatori-UI/internal/dao"
 	"yatori-UI/internal/entity"
@@ -68,6 +69,16 @@ func AddAccount(req entity.AddAccountRequest) (*entity.UserPO, error) {
 		custom.StudyTime = req.CoursesCustom.StudyTime
 		custom.IncludeCourses = req.CoursesCustom.IncludeCourses
 		custom.ExcludeCourses = req.CoursesCustom.ExcludeCourses
+		custom.SelfCheckSw = req.CoursesCustom.SelfCheckSw
+		custom.SelfCheckStartDate = req.CoursesCustom.SelfCheckStartDate
+		custom.SelfCheckEndDate = req.CoursesCustom.SelfCheckEndDate
+		custom.CxExtendReadSw = req.CoursesCustom.CxExtendReadSw
+		custom.CxBbsSw = req.CoursesCustom.CxBbsSw
+		custom.CxWorkRetake = req.CoursesCustom.CxWorkRetake
+		custom.CxRetakeRate = req.CoursesCustom.CxRetakeRate
+		if custom.CxRetakeRate == 0 {
+			custom.CxRetakeRate = 80
+		}
 		if *custom.CxNode == 0 { custom.CxNode = intPtr(3) }
 	}
 
@@ -79,6 +90,8 @@ func AddAccount(req entity.AddAccountRequest) (*entity.UserPO, error) {
 		Password:      req.Password,
 		IsProxy:       req.IsProxy,
 		InformEmails:  req.InformEmails,
+		ShowDocSw:     req.ShowDocSw,
+		ShowDocUrls:   req.ShowDocUrls,
 		CoursesCustom: custom,
 	}
 	userConfigJson, err := json.Marshal(userConfig)
@@ -145,6 +158,8 @@ func UpdateAccount(req entity.UpdateAccountRequest) error {
 	if req.Password != "" { existingConfig.Password = req.Password }
 	existingConfig.IsProxy = req.IsProxy
 	if req.InformEmails != nil { existingConfig.InformEmails = req.InformEmails }
+	existingConfig.ShowDocSw = req.ShowDocSw
+	if req.ShowDocUrls != nil { existingConfig.ShowDocUrls = req.ShowDocUrls }
 
 	if req.CoursesCustom != nil {
 		existingConfig.CoursesCustom.VideoModel = req.CoursesCustom.VideoModel
@@ -158,6 +173,13 @@ func UpdateAccount(req entity.UpdateAccountRequest) error {
 		existingConfig.CoursesCustom.StudyTime = req.CoursesCustom.StudyTime
 		existingConfig.CoursesCustom.IncludeCourses = req.CoursesCustom.IncludeCourses
 		existingConfig.CoursesCustom.ExcludeCourses = req.CoursesCustom.ExcludeCourses
+		existingConfig.CoursesCustom.SelfCheckSw = req.CoursesCustom.SelfCheckSw
+		existingConfig.CoursesCustom.SelfCheckStartDate = req.CoursesCustom.SelfCheckStartDate
+		existingConfig.CoursesCustom.SelfCheckEndDate = req.CoursesCustom.SelfCheckEndDate
+		existingConfig.CoursesCustom.CxExtendReadSw = req.CoursesCustom.CxExtendReadSw
+		existingConfig.CoursesCustom.CxBbsSw = req.CoursesCustom.CxBbsSw
+		existingConfig.CoursesCustom.CxWorkRetake = req.CoursesCustom.CxWorkRetake
+		existingConfig.CoursesCustom.CxRetakeRate = req.CoursesCustom.CxRetakeRate
 		if *existingConfig.CoursesCustom.CxNode == 0 { existingConfig.CoursesCustom.CxNode = intPtr(3) }
 	}
 
@@ -376,4 +398,39 @@ func StartBatchBrush(uids []string) (int, int) {
 		}
 	}
 	return success, total
+}
+
+// CheckAccount 单个账号课程质检
+func CheckAccount(uid string) (*entity.CheckReport, error) {
+	return checker.Check(uid, getSetting())
+}
+
+// CheckAccounts 批量账号课程质检
+func CheckAccounts(uids []string) []*entity.CheckReport {
+	return checker.CheckMany(uids, getSetting())
+}
+
+// CheckAllAccounts 全部账号课程质检
+func CheckAllAccounts() []*entity.CheckReport {
+	return checker.CheckAll(getSetting())
+}
+
+// GetStoredCheckReports 读取全部账号最近一次质检结果
+func GetStoredCheckReports() []*entity.CheckReport {
+	return checker.GetAllStored()
+}
+
+// GetCourseLocks 读取账号待处理的定时开放记录
+func GetCourseLocks(uid string) ([]entity.CourseLockPO, error) {
+	return dao.QueryPendingCourseLocks(uid)
+}
+
+// GetCourseList 拉取账号课程名称列表
+func GetCourseList(uid string) ([]entity.CourseBrief, error) {
+	return checker.CourseList(uid, getSetting())
+}
+
+// GetUserByUid 查询账号
+func GetUserByUid(uid string) (*entity.UserPO, error) {
+	return dao.QueryUserByUid(uid)
 }

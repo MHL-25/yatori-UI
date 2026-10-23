@@ -1,6 +1,6 @@
 import { create } from 'zustand'
 import { parseResponse } from '../utils/helpers'
-import { GetAccountList, AddAccount, DeleteAccount, UpdateAccount, LoginCheck, StartBrush, StopBrush, PauseBrush, GetAllProgress, GetConfig, SaveConfig, ImportConfigFile, StartAllBrush, StartBatchBrush } from '../../wailsjs/go/main/App'
+import { GetAccountList, AddAccount, DeleteAccount, UpdateAccount, LoginCheck, StartBrush, StopBrush, PauseBrush, GetAllProgress, GetConfig, SaveConfig, ImportConfigFile, StartAllBrush, StartBatchBrush, CheckAccount, CheckAccounts, CheckAllAccounts, GetCheckReports, GetCourseList } from '../../wailsjs/go/main/App'
 
 interface Account {
   uid: string
@@ -29,7 +29,7 @@ interface TaskProgress {
 
 interface AppConfig {
   setting: {
-    basicSetting: { completionTone: number; colorLog: number; logOutFileSw: number; logLevel: string; logModel: number }
+    basicSetting: { completionTone: number; colorLog: number; logOutFileSw: number; logLevel: string; logModel: number; autoCheckSw?: number; autoStartSw?: number }
     aiSetting: { aiType: string; aiUrl: string; model: string; API_KEY: string }
     visionAiSetting: { aiType: string; aiUrl: string; model: string; API_KEY: string }
     apiQueSetting: { url: string }
@@ -38,9 +38,54 @@ interface AppConfig {
   users: any[]
 }
 
+export interface CheckChapter {
+  label: string
+  name: string
+  nodeId: string
+  jobTotal: number
+  jobFinished: number
+  status: string
+  lockType: 'open' | 'time' | 'prereq' | 'expired' | 'closed'
+  unlockAt?: string
+  endAt?: string
+  message?: string
+}
+
+export interface CheckCourse {
+  courseId: string
+  courseName: string
+  jobTotal: number
+  jobFinished: number
+  jobRate: number
+  canStudy: boolean
+  reason?: string
+  chapters: CheckChapter[]
+}
+
+export interface CheckReport {
+  uid: string
+  accountName: string
+  checkedAt: string
+  totalCourses: number
+  completedCourses: number
+  pendingCourses: number
+  lockedCourses: number
+  courses: CheckCourse[]
+}
+
+export interface CourseBrief {
+  courseId: string
+  courseName: string
+  jobRate: number
+  isStart: boolean
+}
+
 interface AppStore {
   accounts: Account[]
   progressMap: Record<string, TaskProgress>
+  checkReports: Record<string, CheckReport>
+  checkingUids: Set<string>
+  checkDetailUid: string | null
   config: AppConfig | null
   currentPage: string
   loading: boolean
@@ -58,6 +103,13 @@ interface AppStore {
   pauseBrush: (uid: string) => Promise<{ ok: boolean; msg: string }>
   startAllBrush: () => Promise<{ ok: boolean; msg: string; success: number; total: number }>
   startBatchBrush: (uids: string[]) => Promise<{ ok: boolean; msg: string; success: number; total: number }>
+  checkAccount: (uid: string) => Promise<{ ok: boolean; msg: string; report?: CheckReport }>
+  checkAccounts: (uids: string[]) => Promise<{ ok: boolean; msg: string; count: number }>
+  checkAllAccounts: () => Promise<{ ok: boolean; msg: string; count: number }>
+  fetchCheckReports: () => Promise<void>
+  openCheckDetail: (uid: string) => void
+  closeCheckDetail: () => void
+  fetchCourseList: (uid: string) => Promise<{ ok: boolean; msg: string; courses: CourseBrief[] }>
   fetchProgress: () => Promise<void>
   fetchConfig: () => Promise<void>
   saveConfig: (cfg: any) => Promise<{ ok: boolean; msg: string }>
@@ -69,6 +121,9 @@ interface AppStore {
 export const useAppStore = create<AppStore>((set, get) => ({
   accounts: [],
   progressMap: {},
+  checkReports: {},
+  checkingUids: new Set<string>(),
+  checkDetailUid: null,
   config: null,
   currentPage: 'dashboard',
   loading: false,
@@ -226,6 +281,111 @@ export const useAppStore = create<AppStore>((set, get) => ({
       }
     } catch (e) {
       console.error('fetchProgress error:', e)
+    }
+  },
+
+  checkAccount: async (uid) => {
+    set((s) => {
+      const next = new Set(s.checkingUids)
+      next.add(uid)
+      return { checkingUids: next }
+    })
+    try {
+      const result = await CheckAccount(uid)
+      const resp = parseResponse<CheckReport>(result)
+      if (resp.code === 200 && resp.data) {
+        set((s) => ({
+          checkReports: { ...s.checkReports, [uid]: resp.data as CheckReport },
+        }))
+        return { ok: true, msg: 'OK', report: resp.data as CheckReport }
+      }
+      return { ok: false, msg: resp.message || '检测失败' }
+    } catch (e: any) {
+      return { ok: false, msg: e?.message || 'Network error' }
+    } finally {
+      set((s) => {
+        const next = new Set(s.checkingUids)
+        next.delete(uid)
+        return { checkingUids: next }
+      })
+    }
+  },
+
+  checkAccounts: async (uids) => {
+    set((s) => {
+      const next = new Set(s.checkingUids)
+      uids.forEach((u) => next.add(u))
+      return { checkingUids: next }
+    })
+    try {
+      const result = await CheckAccounts(JSON.stringify(uids))
+      const resp = parseResponse<CheckReport[]>(result)
+      if (resp.code === 200 && resp.data) {
+        const map: Record<string, CheckReport> = {}
+        resp.data.forEach((r) => { map[r.uid] = r })
+        set((s) => ({ checkReports: { ...s.checkReports, ...map } }))
+        return { ok: true, msg: 'OK', count: resp.data.length }
+      }
+      return { ok: false, msg: resp.message || '批量检测失败', count: 0 }
+    } catch (e: any) {
+      return { ok: false, msg: e?.message || 'Network error', count: 0 }
+    } finally {
+      set((s) => {
+        const next = new Set(s.checkingUids)
+        uids.forEach((u) => next.delete(u))
+        return { checkingUids: next }
+      })
+    }
+  },
+
+  checkAllAccounts: async () => {
+    try {
+      const result = await CheckAllAccounts()
+      const resp = parseResponse<CheckReport[]>(result)
+      if (resp.code === 200 && resp.data) {
+        const map: Record<string, CheckReport> = {}
+        resp.data.forEach((r) => { map[r.uid] = r })
+        set((s) => ({ checkReports: { ...s.checkReports, ...map } }))
+        return { ok: true, msg: 'OK', count: resp.data.length }
+      }
+      return { ok: false, msg: resp.message || '全部检测失败', count: 0 }
+    } catch (e: any) {
+      return { ok: false, msg: e?.message || 'Network error', count: 0 }
+    }
+  },
+
+  fetchCheckReports: async () => {
+    try {
+      const result = await GetCheckReports()
+      const resp = parseResponse<CheckReport[]>(result)
+      if (resp.code === 200 && resp.data) {
+        const map: Record<string, CheckReport> = {}
+        resp.data.forEach((r) => { map[r.uid] = r })
+        set({ checkReports: map })
+      }
+    } catch (e) {
+      console.error('fetchCheckReports error:', e)
+    }
+  },
+
+  openCheckDetail: (uid) => {
+    set({ checkDetailUid: uid, currentPage: 'check-detail' })
+  },
+
+  closeCheckDetail: () => {
+    set({ checkDetailUid: null, currentPage: 'check' })
+  },
+
+  fetchCourseList: async (uid) => {
+    try {
+      const result = await GetCourseList(uid)
+      const resp = parseResponse<CourseBrief[]>(result)
+      if (resp.code === 200) {
+        return { ok: true, msg: 'OK', courses: resp.data || [] }
+      }
+      return { ok: false, msg: resp.message || '课程查询失败', courses: [] }
+    } catch (e: any) {
+      return { ok: false, msg: e?.message || 'Network error', courses: [] }
     }
   },
 

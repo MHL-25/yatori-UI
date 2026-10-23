@@ -3,17 +3,22 @@ import AppLayout from './components/Layout'
 import ErrorBoundary from './components/ErrorBoundary'
 import ToastContainer from './components/ToastContainer'
 import DisclaimerModal from './components/DisclaimerModal'
+import SponsorsModal from './components/SponsorsModal'
 import DashboardPage from './pages/DashboardPage'
 import AccountsPage from './pages/AccountsPage'
+import CheckPage from './pages/CheckPage'
+import CheckDetailPage from './pages/CheckDetailPage'
 import MonitorPage from './pages/MonitorPage'
 import SettingsPage from './pages/SettingsPage'
 import { useAppStore } from './stores/useAppStore'
+import { parseResponse } from './utils/helpers'
 import { EventsOn } from '../wailsjs/runtime/runtime'
-import { IsDisclaimerAccepted, AcceptDisclaimer } from '../wailsjs/go/main/App'
+import { IsDisclaimerAccepted, AcceptDisclaimer, GetDonatePrompt, DisableDonatePrompt } from '../wailsjs/go/main/App'
 
 const App: React.FC = () => {
   const { currentPage, fetchAccounts, fetchProgress, updateProgress, addLog } = useAppStore()
   const [disclaimerAccepted, setDisclaimerAccepted] = useState<boolean | null>(null)
+  const [sponsorCount, setSponsorCount] = useState<number | null>(null)
 
   useEffect(() => {
     IsDisclaimerAccepted().then(accepted => {
@@ -30,6 +35,21 @@ const App: React.FC = () => {
     } catch (e) {
       console.error('Accept disclaimer failed:', e)
     }
+  }
+
+  useEffect(() => {
+    if (!disclaimerAccepted) return
+    GetDonatePrompt().then((raw) => {
+      const resp = parseResponse<{ show: boolean; count: number }>(raw)
+      if (resp.code === 200 && resp.data?.show) {
+        setSponsorCount(resp.data.count)
+      }
+    }).catch(() => {})
+  }, [disclaimerAccepted])
+
+  const handleDisableSponsor = async () => {
+    try { await DisableDonatePrompt() } catch {}
+    setSponsorCount(null)
   }
 
   useEffect(() => {
@@ -79,6 +99,8 @@ const App: React.FC = () => {
     switch (currentPage) {
       case 'dashboard': return <DashboardPage />
       case 'accounts': return <AccountsPage />
+      case 'check': return <CheckPage />
+      case 'check-detail': return <CheckDetailPage />
       case 'monitor': return <MonitorPage />
       case 'settings': return <SettingsPage />
       default: return <DashboardPage />
@@ -91,6 +113,13 @@ const App: React.FC = () => {
         {renderPage()}
       </AppLayout>
       <ToastContainer />
+      {sponsorCount !== null && (
+        <SponsorsModal
+          count={sponsorCount}
+          onClose={() => setSponsorCount(null)}
+          onDisable={handleDisableSponsor}
+        />
+      )}
     </ErrorBoundary>
   )
 }

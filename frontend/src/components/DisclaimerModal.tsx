@@ -34,11 +34,20 @@ const DisclaimerModal: React.FC<DisclaimerModalProps> = ({ onAccept, readOnly, o
   return (
     <div className="fixed inset-0 z-[9999] flex items-center justify-center bg-black/80 backdrop-blur-sm">
       <div className="relative w-[640px] max-h-[85vh] mx-4 bg-dark-900 border border-dark-700 rounded-xl shadow-2xl overflow-hidden">
-        <div className="bg-gradient-to-r from-accent-600 to-neon-purple p-4">
-          <h2 className="text-lg font-bold text-white text-center">⚠️ 免责声明与使用须知</h2>
+        <div className="bg-dark-950 border-b border-dark-700 p-4">
+          <h2 className="text-lg font-bold text-accent-400 text-center">⚠️ 免责声明与使用须知</h2>
         </div>
 
         <div className="p-6 overflow-y-auto max-h-[55vh] text-sm text-dark-200 leading-relaxed space-y-4">
+          <div className="rounded-xl border border-accent-500/50 bg-accent-500/10 p-4">
+            <p className="text-base font-semibold text-dark-50">如果觉得本项目做的不错，可以赞助一下吗（双手合十）</p>
+            <p className="text-xs text-dark-300 mt-1">你的赞助将会是我维护的最大动力，当然也可以不赞助.....哦</p>
+            <a href="https://afdian.com/a/yatori-UI" target="_blank" rel="noopener noreferrer"
+              className="btn-primary inline-flex items-center gap-2 mt-3 text-sm">
+              前往爱发电支持：https://afdian.com/a/yatori-UI
+            </a>
+          </div>
+
           <div className="space-y-2">
             <p>
               本软件由大佬：<span className="text-accent-400 font-semibold">"Yatori-Dev"</span> 提供核心代码，原项目地址：
@@ -105,6 +114,21 @@ const DisclaimerModal: React.FC<DisclaimerModalProps> = ({ onAccept, readOnly, o
           </div>
 
           <div className="border-t border-dark-700 pt-4">
+            <h3 className="text-accent-400 font-bold text-base mb-3">v1.2.1 更新内容</h3>
+            <ul className="list-disc list-inside space-y-1.5 text-dark-300">
+              <li>【新增】课程质检：单个 / 批量 / 全部账号检测，仪表盘账号卡片可直接质检并进入独立详情页</li>
+              <li>【新增】前置任务与定时开放调度：受限课程单独串行，定时节点到点自动续刷</li>
+              <li>【新增】账号级自检日期区间、ShowDoc 微信推送、课程一键查询选择器</li>
+              <li>【新增】学习通视频互动测验、拓展阅读、讨论区全部话题 AI 回复</li>
+              <li>【新增】启动次数统计与赞助提示：达到随机次数时提示，可关闭或选择不再提示</li>
+              <li>【新增】爱发电赞助入口（公告顶部、仪表盘、启动提示）</li>
+              <li>【优化】60-30-10 配色与对比度、添加账号三步卡片流程、质检页搜索与独立详情</li>
+              <li>【说明】智慧树平台暂未接入，后续版本再支持</li>
+              <li>【说明】作业强制重做、图片题目 OCR、考试 RSA 签名将在后续版本逐步补齐</li>
+            </ul>
+          </div>
+
+          <div className="border-t border-dark-700 pt-4">
             <h3 className="text-green-400 font-bold text-base mb-3">📋 v1.0.9 更新内容</h3>
             <ul className="list-disc list-inside space-y-1.5 text-dark-300">
               <li>【重要修复】多任务点模式(VModel2/3)课程并发处理：对齐原项目逻辑，VideoModel!=1时课程级并发执行，大幅提升刷课效率</li>
@@ -159,7 +183,7 @@ const DisclaimerModal: React.FC<DisclaimerModalProps> = ({ onAccept, readOnly, o
             {readOnly ? (
               <button
                 onClick={onClose}
-                className="px-6 py-2 rounded-lg bg-gradient-to-r from-accent-500 to-neon-purple text-white hover:opacity-90 transition-opacity text-sm font-medium"
+                className="px-6 py-2 rounded-xl bg-accent-500 text-dark-950 hover:bg-accent-400 transition-colors text-sm font-semibold"
               >
                 我已知晓
               </button>
@@ -167,10 +191,10 @@ const DisclaimerModal: React.FC<DisclaimerModalProps> = ({ onAccept, readOnly, o
               <button
                 onClick={onAccept}
                 disabled={!canAccept}
-                className={`px-6 py-2 rounded-lg text-sm font-medium transition-all ${
+                className={`px-6 py-2 rounded-xl text-sm font-semibold transition-all ${
                   canAccept
-                    ? 'bg-gradient-to-r from-accent-500 to-neon-purple text-white hover:opacity-90 cursor-pointer'
-                    : 'bg-dark-700 text-dark-500 cursor-not-allowed'
+                    ? 'bg-accent-500 text-dark-950 hover:bg-accent-400 cursor-pointer'
+                    : 'bg-dark-700 text-dark-400 cursor-not-allowed'
                 }`}
               >
                 {canAccept ? '我已阅读并接受' : `请等待 ${countdown} 秒`}

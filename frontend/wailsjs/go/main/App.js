@@ -10,12 +10,32 @@ export function AddAccount(arg1) {
   return window['go']['main']['App']['AddAccount'](arg1);
 }
 
+export function CheckAccount(arg1) {
+  return window['go']['main']['App']['CheckAccount'](arg1);
+}
+
+export function CheckAccounts(arg1) {
+  return window['go']['main']['App']['CheckAccounts'](arg1);
+}
+
+export function CheckAllAccounts() {
+  return window['go']['main']['App']['CheckAllAccounts']();
+}
+
 export function CloseWindow() {
   return window['go']['main']['App']['CloseWindow']();
 }
 
 export function DeleteAccount(arg1) {
   return window['go']['main']['App']['DeleteAccount'](arg1);
+}
+
+export function DisableDonatePrompt() {
+  return window['go']['main']['App']['DisableDonatePrompt']();
+}
+
+export function GetDonatePrompt() {
+  return window['go']['main']['App']['GetDonatePrompt']();
 }
 
 export function GetAccountList() {
@@ -34,8 +54,20 @@ export function GetAppVersion() {
   return window['go']['main']['App']['GetAppVersion']();
 }
 
+export function GetCheckReports() {
+  return window['go']['main']['App']['GetCheckReports']();
+}
+
 export function GetConfig() {
   return window['go']['main']['App']['GetConfig']();
+}
+
+export function GetCourseList(arg1) {
+  return window['go']['main']['App']['GetCourseList'](arg1);
+}
+
+export function GetCourseLocks(arg1) {
+  return window['go']['main']['App']['GetCourseLocks'](arg1);
 }
 
 export function GetPlatforms() {

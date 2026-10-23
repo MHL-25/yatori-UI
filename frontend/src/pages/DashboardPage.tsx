@@ -1,8 +1,9 @@
 import React, { useEffect, useState } from 'react'
 import { useAppStore } from '../stores/useAppStore'
 import { cn, getPlatformName, getPlatformIcon, getStatusColor, getStatusLabel, getProgressColor, APP_VERSION } from '../utils/helpers'
-import { Users, Activity, Play, CheckCircle, AlertCircle, Clock, Zap, Megaphone } from 'lucide-react'
+import { Users, Activity, Play, CheckCircle, AlertCircle, Clock, Zap, Megaphone, ScanSearch, Loader2 } from 'lucide-react'
 import DisclaimerModal from '../components/DisclaimerModal'
+import AfdianBanner from '../components/AfdianBanner'
 
 const StatCard: React.FC<{ icon: React.ReactNode; label: string; value: string | number; color: string; sub?: string }> = ({ icon, label, value, color, sub }) => (
   <div className="glass-card p-4 flex items-center gap-4">
@@ -18,8 +19,17 @@ const StatCard: React.FC<{ icon: React.ReactNode; label: string; value: string |
 )
 
 const DashboardPage: React.FC = () => {
-  const { accounts, progressMap, setCurrentPage, fetchAccounts, fetchProgress } = useAppStore()
+  const { accounts, progressMap, setCurrentPage, fetchAccounts, fetchProgress, checkAccount, openCheckDetail, checkingUids } = useAppStore()
   const [showDisclaimer, setShowDisclaimer] = useState(false)
+
+  const handleDashboardCheck = async (uid: string) => {
+    const result = await checkAccount(uid)
+    if (!result.ok) {
+      alert(result.msg)
+      return
+    }
+    openCheckDetail(uid)
+  }
 
   useEffect(() => {
     fetchAccounts()
@@ -59,6 +69,8 @@ const DashboardPage: React.FC = () => {
           </div>
         </div>
       </div>
+
+      <AfdianBanner />
 
       <div className="grid grid-cols-4 gap-4">
         <StatCard
@@ -156,6 +168,18 @@ const DashboardPage: React.FC = () => {
                       </div>
                     )}
                   </div>
+                  <button
+                    onClick={() => handleDashboardCheck(account.uid)}
+                    disabled={checkingUids.has(account.uid)}
+                    className={cn(
+                      'btn-secondary text-xs flex items-center gap-1.5 shrink-0 px-2.5 py-1.5',
+                      checkingUids.has(account.uid) && 'opacity-60'
+                    )}
+                    title="检测该账号课程完成情况"
+                  >
+                    {checkingUids.has(account.uid) ? <Loader2 size={12} className="animate-spin" /> : <ScanSearch size={12} />}
+                    {checkingUids.has(account.uid) ? '质检中' : '质检'}
+                  </button>
                   <span className={cn(
                     "text-xs px-2 py-0.5 rounded-full shrink-0",
                     status === 'running' ? 'bg-accent-600/20 text-accent-400' :

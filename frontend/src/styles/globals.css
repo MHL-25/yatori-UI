@@ -4,25 +4,42 @@
 @tailwind components;
 @tailwind utilities;
 
+/*
+ * 60-30-10 配色
+ * 主色（背景，60%）：#0B1220
+ * 辅助色（卡片/分区，30%）：#16203A / #1D2A47
+ * 强调色（唯一 CTA，10%）：#22D3A6
+ * 语义色：警告 #F5B54A、危险 #FF6B6B
+ * 中性灰阶：#E6EDF7 / #A7B4C7 / #7C8BA1 / #6B7A90
+ *
+ * 对比度（WCAG 相对亮度）：
+ * 正文 #E6EDF7 / 背景 #0B1220 = 15.89:1
+ * 正文 #E6EDF7 / 卡片 #16203A = 13.69:1
+ * 次文 #A7B4C7 / 卡片 #16203A = 7.68:1
+ * 弱文 #7C8BA1 / 背景 #0B1220 = 5.41:1
+ * 强调 #22D3A6 / 背景 #0B1220 = 9.75:1
+ * 按钮文字 #06231C / 强调底 #22D3A6 = 8.65:1
+ * 描边 #6B7A90 / 卡片 #16203A = 3.70:1
+ * 危险 #FF6B6B / 卡片 #16203A = 5.81:1
+ * 警告 #F5B54A / 卡片 #16203A = 8.90:1
+ * 禁用态文字 #5E6E86 / 卡片 #16203A = 约 2.5:1（仅用于不可交互控件）
+ */
 :root {
-  --bg-primary: #0f0f1a;
-  --bg-secondary: #1a1a2e;
-  --bg-tertiary: #16213e;
-  --bg-card: #1e1e36;
-  --bg-hover: #252547;
-  --border-color: #2a2a4a;
-  --text-primary: #e0e0f0;
-  --text-secondary: #8888aa;
-  --text-muted: #555577;
-  --accent-blue: #00d4ff;
-  --accent-purple: #b44aff;
-  --accent-green: #00ff88;
-  --accent-orange: #ff8c00;
-  --accent-pink: #ff006e;
-  --accent-red: #ff4444;
-  --glow-blue: 0 0 10px rgba(0, 212, 255, 0.3);
-  --glow-purple: 0 0 10px rgba(180, 74, 255, 0.3);
-  --glow-green: 0 0 10px rgba(0, 255, 136, 0.3);
+  --bg-primary: #0B1220;
+  --bg-secondary: #16203A;
+  --bg-tertiary: #1D2A47;
+  --bg-card: #16203A;
+  --bg-hover: #22304F;
+  --border-color: #6B7A90;
+  --border-subtle: #2E3D56;
+  --text-primary: #E6EDF7;
+  --text-secondary: #A7B4C7;
+  --text-muted: #7C8BA1;
+  --accent: #22D3A6;
+  --accent-strong: #17B890;
+  --accent-ink: #06231C;
+  --warn: #F5B54A;
+  --danger: #FF6B6B;
 }
 
 * {
@@ -41,8 +58,8 @@ html, body, #root {
 }
 
 ::-webkit-scrollbar {
-  width: 6px;
-  height: 6px;
+  width: 8px;
+  height: 8px;
 }
 
 ::-webkit-scrollbar-track {
@@ -50,8 +67,8 @@ html, body, #root {
 }
 
 ::-webkit-scrollbar-thumb {
-  background: var(--border-color);
-  border-radius: 3px;
+  background: #3A4A64;
+  border-radius: 4px;
 }
 
 ::-webkit-scrollbar-thumb:hover {
@@ -59,61 +76,111 @@ html, body, #root {
 }
 
 @layer components {
+  /* 卡片：实色表面，避免文字压在渐变上 */
   .glass-card {
-    @apply bg-dark-900/60 backdrop-blur-xl border border-dark-700/50 rounded-xl;
+    @apply bg-dark-900 border border-dark-700 rounded-2xl;
+    box-shadow: 0 12px 32px rgba(0, 0, 0, 0.28);
+  }
+
+  .surface-card {
+    @apply bg-dark-900 border border-dark-700 rounded-2xl;
+  }
+
+  .surface-sub {
+    @apply bg-dark-800 rounded-xl border border-dark-700/70;
   }
 
   .glow-border {
-    @apply border border-accent-500/30;
-    box-shadow: var(--glow-blue);
+    @apply border border-accent-500/40;
+    box-shadow: 0 0 0 1px rgba(34, 211, 166, 0.12);
   }
 
   .neon-text {
-    text-shadow: 0 0 10px rgba(0, 212, 255, 0.5), 0 0 20px rgba(0, 212, 255, 0.3);
+    color: var(--accent);
   }
 
   .btn-primary {
-    @apply px-4 py-2 rounded-lg font-medium text-sm transition-all duration-200;
-    @apply bg-gradient-to-r from-accent-600 to-accent-700 hover:from-accent-500 hover:to-accent-600;
-    @apply text-white shadow-lg shadow-accent-600/20 hover:shadow-accent-500/40;
+    @apply px-4 py-2 rounded-xl font-semibold text-sm transition-all duration-200;
+    @apply bg-accent-500 hover:bg-accent-400 active:bg-accent-600;
+    color: var(--accent-ink);
+    box-shadow: 0 6px 18px rgba(34, 211, 166, 0.18);
   }
 
   .btn-secondary {
-    @apply px-4 py-2 rounded-lg font-medium text-sm transition-all duration-200;
+    @apply px-4 py-2 rounded-xl font-medium text-sm transition-all duration-200;
     @apply bg-dark-800 hover:bg-dark-700 text-dark-200 border border-dark-600;
   }
 
+  .btn-ghost {
+    @apply px-3 py-2 rounded-xl font-medium text-sm transition-all duration-200;
+    @apply text-dark-300 hover:text-dark-100 hover:bg-dark-800;
+  }
+
   .btn-danger {
-    @apply px-4 py-2 rounded-lg font-medium text-sm transition-all duration-200;
-    @apply bg-red-600/20 hover:bg-red-600/30 text-red-400 border border-red-600/30;
+    @apply px-4 py-2 rounded-xl font-medium text-sm transition-all duration-200;
+    @apply bg-danger/10 text-danger border border-danger/40;
   }
 
   .btn-success {
-    @apply px-4 py-2 rounded-lg font-medium text-sm transition-all duration-200;
-    @apply bg-emerald-600/20 hover:bg-emerald-600/30 text-emerald-400 border border-emerald-600/30;
+    @apply px-4 py-2 rounded-xl font-medium text-sm transition-all duration-200;
+    @apply bg-accent-500/10 text-accent-400 border border-accent-500/40;
   }
 
   .input-field {
-    @apply w-full px-3 py-2 rounded-lg text-sm transition-all duration-200;
-    @apply bg-dark-800 border border-dark-600 text-dark-100 placeholder-dark-400;
-    @apply focus:outline-none focus:border-accent-500/50 focus:ring-1 focus:ring-accent-500/20;
+    @apply w-full px-3.5 py-2.5 rounded-xl text-sm transition-all duration-200;
+    @apply bg-dark-950 border border-dark-500 text-dark-100 placeholder-dark-400;
+    @apply focus:outline-none focus:border-accent-500 focus:ring-2 focus:ring-accent-500/20;
   }
 
   .select-field {
-    @apply w-full px-3 py-2 rounded-lg text-sm transition-all duration-200 appearance-none;
-    @apply bg-dark-800 border border-dark-600 text-dark-100;
-    @apply focus:outline-none focus:border-accent-500/50 focus:ring-1 focus:ring-accent-500/20;
+    @apply w-full px-3.5 py-2.5 rounded-xl text-sm transition-all duration-200 appearance-none;
+    @apply bg-dark-950 border border-dark-500 text-dark-100;
+    @apply focus:outline-none focus:border-accent-500 focus:ring-2 focus:ring-accent-500/20;
   }
 
   .sidebar-item {
-    @apply flex items-center gap-3 px-4 py-2.5 rounded-lg text-sm font-medium;
-    @apply text-dark-300 hover:text-dark-100 hover:bg-dark-800/50;
+    @apply flex items-center gap-3 px-4 py-2.5 rounded-xl text-sm font-medium;
+    @apply text-dark-300 hover:text-dark-100 hover:bg-dark-800/70;
     @apply transition-all duration-200 cursor-pointer;
   }
 
   .sidebar-item-active {
-    @apply text-accent-400 bg-accent-600/10 border border-accent-600/20;
-    box-shadow: inset 0 0 20px rgba(92, 124, 250, 0.05);
+    @apply text-dark-50 bg-dark-800 border border-dark-600;
+    box-shadow: inset 3px 0 0 var(--accent);
+  }
+
+  .badge {
+    @apply inline-flex items-center gap-1 px-2 py-0.5 rounded-md text-xs font-medium border;
+  }
+
+  .badge-success {
+    @apply badge bg-accent-500/10 text-accent-400 border-accent-500/40;
+  }
+
+  .badge-warning {
+    @apply badge bg-warn/10 text-warn border-warn/40;
+  }
+
+  .badge-danger {
+    @apply badge bg-danger/10 text-danger border-danger/40;
+  }
+
+  .badge-neutral {
+    @apply badge bg-dark-800 text-dark-300 border-dark-600;
+  }
+
+  /* 卡片式分步流程 */
+  .step-dot {
+    @apply w-2.5 h-2.5 rounded-full bg-dark-600 transition-all duration-300;
+  }
+
+  .step-dot-active {
+    @apply bg-accent-500;
+    box-shadow: 0 0 0 4px rgba(34, 211, 166, 0.15);
+  }
+
+  .step-dot-done {
+    @apply bg-accent-700;
   }
 }
 

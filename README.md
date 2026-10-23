@@ -4,7 +4,7 @@
   <p>一款基于 Wails v2 框架构建的跨平台桌面端智能网课辅助工具</p>
   
   <div style="margin: 20px 0;">
-    <img src="https://img.shields.io/badge/Version-1.1.4-blue.svg?style=flat-square" alt="Version">
+    <img src="https://img.shields.io/badge/Version-1.2.1-blue.svg?style=flat-square" alt="Version">
     <img src="https://img.shields.io/badge/Go-1.24.0-00ADD8.svg?style=flat-square&logo=go" alt="Go">
     <img src="https://img.shields.io/badge/Wails-v2.11.0-FF6B6B.svg?style=flat-square" alt="Wails">
     <img src="https://img.shields.io/badge/React-18.2-61DAFB.svg?style=flat-square&logo=react" alt="React">
@@ -12,6 +12,14 @@
     <img src="https://img.shields.io/badge/License-MIT-green.svg?style=flat-square" alt="License">
   </div>
 </div>
+
+---
+
+## 支持项目
+
+如果觉得本项目做的不错，可以赞助一下吗（双手合十），你的赞助将会是我维护的最大动力，当然也可以不赞助.....哦
+
+爱发电地址：**https://afdian.com/a/yatori-UI**
 
 ---
 
@@ -48,10 +56,16 @@
 | 系统托盘运行 | ✅ | 最小化到托盘后台运行 |
 | 本地数据持久化 | ✅ | SQLite 数据库存储学习记录 |
 | 暴力模式 | ✅ | 部分平台支持，无视前置课程限制 |
+| 课程质检 | ✅ | 单账号 / 指定账号 / 全部账号检测课程完成度与章节锁状态 |
+| 前置与定时锁调度 | ✅ | 受限课程单独串行补前置，定时节点记录开放时间并到点自动续刷 |
+| 账号自检时间窗 | ✅ | 按账号配置时段，启动时依据系统时间决定是否自动质检/刷课 |
+| 互动测验 | ✅ | 学习通视频弹题自动识别并提交答案 |
 
 ---
 
 ## 🎯 支持平台
+
+> 注：智慧树平台暂未接入，将在后续版本支持。
 
 <table>
   <thead>

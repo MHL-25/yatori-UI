@@ -2,9 +2,11 @@ package config
 
 import (
 	"encoding/json"
+	"fmt"
 	"os"
 	"path/filepath"
 	"strings"
+	"time"
 
 	"github.com/spf13/viper"
 	"github.com/yatori-dev/yatori-go-core/models/ctype"
@@ -31,6 +33,9 @@ type BasicSetting struct {
 	LogLevel       string `json:"logLevel,omitempty" yaml:"logLevel"`
 	LogModel       int    `json:"logModel" yaml:"logModel"`
 	WebModel       int    `json:"webModel" yaml:"webModel"`
+	// 启动自动化：AutoCheckSw=1 启动后自动质检；AutoStartSw=1 质检后自动开始刷课
+	AutoCheckSw int `json:"autoCheckSw" yaml:"autoCheckSw"`
+	AutoStartSw int `json:"autoStartSw" yaml:"autoStartSw"`
 }
 
 type AiSetting struct {
@@ -78,6 +83,15 @@ type CoursesCustom struct {
 	ExcludeCourses  []string          `json:"excludeCourses" yaml:"excludeCourses"`
 	IncludeCourses  []string          `json:"includeCourses" yaml:"includeCourses"`
 	CoursesSettings []CoursesSettings `json:"coursesSettings" yaml:"coursesSettings"`
+	// 账号级自检日期区间（YYYY-MM-DD，含首尾两天）
+	SelfCheckSw        int    `json:"selfCheckSw" yaml:"selfCheckSw"`
+	SelfCheckStartDate string `json:"selfCheckStartDate" yaml:"selfCheckStartDate"`
+	SelfCheckEndDate   string `json:"selfCheckEndDate" yaml:"selfCheckEndDate"`
+	// 学习通扩展任务：拓展阅读、讨论区全部话题、作业重做
+	CxExtendReadSw int `json:"cxExtendReadSw" yaml:"cxExtendReadSw"`
+	CxBbsSw        int `json:"cxBbsSw" yaml:"cxBbsSw"`
+	CxWorkRetake   int `json:"cxWorkRetake" yaml:"cxWorkRetake"`
+	CxRetakeRate   int `json:"cxRetakeRate" yaml:"cxRetakeRate"`
 }
 
 type User struct {
@@ -89,6 +103,9 @@ type User struct {
 	IsProxy       int           `json:"isProxy" yaml:"isProxy"`
 	InformEmails  []string      `json:"informEmails" yaml:"informEmails"`
 	CoursesCustom CoursesCustom `json:"coursesCustom" yaml:"coursesCustom"`
+	// ShowDoc 推送（账号级独立开关，可多个地址）
+	ShowDocSw   int      `json:"showDocSw" yaml:"showDocSw"`
+	ShowDocUrls []string `json:"showDocUrls" yaml:"showDocUrls"`
 }
 
 func defaultValue(config *JSONDataForConfig) {
@@ -123,6 +140,13 @@ func ReadConfig(filePath string) JSONDataForConfig {
 	if err != nil {
 		return configJson
 	}
+	// 旧配置文件没有启动自动化字段时，默认开启
+	if !viper.IsSet("setting.basicSetting.autoCheckSw") {
+		configJson.Setting.BasicSetting.AutoCheckSw = 1
+	}
+	if !viper.IsSet("setting.basicSetting.autoStartSw") {
+		configJson.Setting.BasicSetting.AutoStartSw = 1
+	}
 	return configJson
 }
 
@@ -142,6 +166,8 @@ func EnsureConfigFile(filePath string) *JSONDataForConfig {
 		cfg.Setting.BasicSetting.LogOutFileSw = 1
 		cfg.Setting.BasicSetting.LogLevel = "INFO"
 		cfg.Setting.BasicSetting.LogModel = 0
+		cfg.Setting.BasicSetting.AutoCheckSw = 1
+		cfg.Setting.BasicSetting.AutoStartSw = 1
 		cfg.Setting.AiSetting.AiType = "TONGYI"
 		cfg.Setting.ApiQueSetting.Url = "http://localhost:8083"
 		SaveConfig(cfg, filePath)
@@ -185,6 +211,49 @@ func CmpCourse(name string, list []string) bool {
 		}
 	}
 	return false
+}
+
+// InSelfCheckWindow 判断当前系统日期是否在账号配置的自检日期区间内（含首尾）。
+// 未开启或日期为空时视为不限日期，返回 true。
+func InSelfCheckWindow(user User, now time.Time) (bool, string) {
+	custom := user.CoursesCustom
+	if custom.SelfCheckSw != 1 {
+		return true, "未启用自检日期区间"
+	}
+	startStr := strings.TrimSpace(custom.SelfCheckStartDate)
+	endStr := strings.TrimSpace(custom.SelfCheckEndDate)
+	if startStr == "" && endStr == "" {
+		return true, "未设置日期区间，按不限日期处理"
+	}
+	var start, end time.Time
+	var err error
+	if startStr != "" {
+		start, err = time.ParseInLocation("2006-01-02", startStr, time.Local)
+		if err != nil {
+			return true, "自检开始日期格式错误，按不限日期处理"
+		}
+	}
+	if endStr != "" {
+		end, err = time.ParseInLocation("2006-01-02", endStr, time.Local)
+		if err != nil {
+			return true, "自检结束日期格式错误，按不限日期处理"
+		}
+	}
+	today := time.Date(now.Year(), now.Month(), now.Day(), 0, 0, 0, 0, time.Local)
+	if !start.IsZero() && today.Before(start) {
+		return false, "当前日期早于自检开始日期 " + startStr
+	}
+	if !end.IsZero() && today.After(end) {
+		return false, "当前日期晚于自检结束日期 " + endStr
+	}
+	return true, fmt.Sprintf("当前日期在自检区间 %s ~ %s 内", orAll(startStr), orAll(endStr))
+}
+
+func orAll(v string) string {
+	if v == "" {
+		return "不限"
+	}
+	return v
 }
 
 func ImportConfigFile(filePath string) (*JSONDataForConfig, error) {

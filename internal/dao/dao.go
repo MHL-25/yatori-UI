@@ -7,16 +7,19 @@ import (
 
 	"gorm.io/driver/sqlite"
 	"gorm.io/gorm"
+	"gorm.io/gorm/logger"
 )
 
 var GlobalDB *gorm.DB
 
 func InitDB(dbPath string) error {
-	db, err := gorm.Open(sqlite.Open(dbPath), &gorm.Config{})
+	db, err := gorm.Open(sqlite.Open(dbPath), &gorm.Config{
+		Logger: logger.Default.LogMode(logger.Silent),
+	})
 	if err != nil {
 		return err
 	}
-	err = db.AutoMigrate(&entity.UserPO{}, &entity.SettingPO{})
+	err = db.AutoMigrate(&entity.UserPO{}, &entity.SettingPO{}, &entity.CourseLockPO{}, &entity.AccountCheckPO{})
 	if err != nil {
 		return err
 	}
@@ -126,4 +129,88 @@ func UpdateUser(uid string, updateData map[string]interface{}) error {
 		return errors.New("更新用户失败: " + err.Error())
 	}
 	return nil
+}
+
+// ReplaceCourseLocks 覆盖某账号某门课程的待处理课程锁记录
+func ReplaceCourseLocks(uid, courseID string, locks []entity.CourseLockPO) error {
+	if GlobalDB == nil {
+		return errors.New("database not initialized")
+	}
+	return GlobalDB.Transaction(func(tx *gorm.DB) error {
+		if err := tx.Where("uid = ? AND course_id = ? AND handled = ?", uid, courseID, false).Delete(&entity.CourseLockPO{}).Error; err != nil {
+			return err
+		}
+		if len(locks) == 0 {
+			return nil
+		}
+		return tx.Create(&locks).Error
+	})
+}
+
+// QueryDueCourseLocks 查询已到解锁时间且未处理的课程锁
+func QueryDueCourseLocks(now time.Time) ([]entity.CourseLockPO, error) {
+	if GlobalDB == nil {
+		return nil, errors.New("database not initialized")
+	}
+	var locks []entity.CourseLockPO
+	if err := GlobalDB.Where("handled = ? AND unlock_at <= ?", false, now).Order("unlock_at ASC").Find(&locks).Error; err != nil {
+		return nil, err
+	}
+	return locks, nil
+}
+
+// QueryPendingCourseLocks 查询某账号未处理的课程锁
+func QueryPendingCourseLocks(uid string) ([]entity.CourseLockPO, error) {
+	if GlobalDB == nil {
+		return nil, errors.New("database not initialized")
+	}
+	var locks []entity.CourseLockPO
+	if err := GlobalDB.Where("uid = ? AND handled = ?", uid, false).Order("unlock_at ASC").Find(&locks).Error; err != nil {
+		return nil, err
+	}
+	return locks, nil
+}
+
+// MarkCourseLockHandled 标记课程锁已处理
+func MarkCourseLockHandled(id uint) error {
+	if GlobalDB == nil {
+		return errors.New("database not initialized")
+	}
+	return GlobalDB.Model(&entity.CourseLockPO{}).Where("id = ?", id).Update("handled", true).Error
+}
+
+// SaveCheckReport 保存账号最近一次质检报告
+func SaveCheckReport(report *entity.CheckReport, summary string) error {
+	if GlobalDB == nil {
+		return errors.New("database not initialized")
+	}
+	po := entity.AccountCheckPO{Uid: report.Uid, CheckedAt: report.CheckedAt, Summary: summary}
+	return GlobalDB.Save(&po).Error
+}
+
+// GetCheckReport 读取账号最近一次质检报告 JSON
+func GetCheckReport(uid string) (string, error) {
+	if GlobalDB == nil {
+		return "", errors.New("database not initialized")
+	}
+	var po entity.AccountCheckPO
+	if err := GlobalDB.Where("uid = ?", uid).First(&po).Error; err != nil {
+		if errors.Is(err, gorm.ErrRecordNotFound) {
+			return "", nil
+		}
+		return "", err
+	}
+	return po.Summary, nil
+}
+
+// GetAllCheckReports 读取所有账号最近一次质检报告
+func GetAllCheckReports() ([]entity.AccountCheckPO, error) {
+	if GlobalDB == nil {
+		return nil, errors.New("database not initialized")
+	}
+	var list []entity.AccountCheckPO
+	if err := GlobalDB.Find(&list).Error; err != nil {
+		return nil, err
+	}
+	return list, nil
 }
