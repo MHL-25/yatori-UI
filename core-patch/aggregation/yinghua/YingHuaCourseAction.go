@@ -5,7 +5,6 @@ import (
 	"errors"
 	"fmt"
 	"math/rand"
-	"os"
 	"regexp"
 	"strconv"
 	"strings"
@@ -833,13 +832,12 @@ func StartWorkForExternalAction(userCache *yinghuaApi.YingHuaUserCache,
 
 		//standardProblem := v.TurnProblem() //转为标准问题结构体
 		resultQuestion, err := external.ApiQueRequest(v.Question, queBankUrl, 5, nil)
-		v.Question.Answers = resultQuestion.Question.Answers         //赋值给题目结构体变量
-		v.Question.Answers = answerTurnResult(userCache, v.Question) //转换答案
-		//v.Question.Answers = aiTurnYingHuaAnswer(userCache,, v)
 		if err != nil {
 			log.Print(log.INFO, `[`, userCache.Account, `] `, log.BoldRed, "外置题库异常，返回信息：", err.Error())
-			os.Exit(0)
+			return err
 		}
+		v.Question.Answers = resultQuestion.Question.Answers         //赋值给题目结构体变量
+		v.Question.Answers = answerTurnResult(userCache, v.Question) //转换答案
 		//fmt.Println(aiAnswer)
 		subWorkApi, err := yinghuaApi.SubmitWorkApi(*userCache, work.WorkId, v.AnswerId, v.Question, "0", 10, nil)
 		if err != nil {

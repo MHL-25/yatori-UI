@@ -1,7 +1,9 @@
 package monitor
 
 import (
+	"log"
 	"sync"
+	"time"
 )
 
 type TaskStatus string
@@ -30,18 +32,49 @@ type TaskProgress struct {
 	ErrorMessage string     `json:"errorMessage,omitempty"`
 }
 
+type busEvent struct {
+	eventType string
+	data      interface{}
+}
+
 type EventBus struct {
 	mu        sync.RWMutex
 	progress  map[string]*TaskProgress
 	listeners []func(eventType string, data interface{})
+	eventCh   chan busEvent
 }
 
 var GlobalEventBus = NewEventBus()
 
 func NewEventBus() *EventBus {
-	return &EventBus{
+	eb := &EventBus{
 		progress: make(map[string]*TaskProgress),
+		eventCh:  make(chan busEvent, 4096),
 	}
+	go eb.dispatch()
+	return eb
+}
+
+// dispatch 单协程按顺序消费事件，避免每个账号的日志直接阻塞任务协程
+func (eb *EventBus) dispatch() {
+	for event := range eb.eventCh {
+		eb.mu.RLock()
+		listeners := make([]func(eventType string, data interface{}), len(eb.listeners))
+		copy(listeners, eb.listeners)
+		eb.mu.RUnlock()
+		for _, fn := range listeners {
+			eb.callListener(fn, event)
+		}
+	}
+}
+
+func (eb *EventBus) callListener(fn func(eventType string, data interface{}), event busEvent) {
+	defer func() {
+		if r := recover(); r != nil {
+			log.Printf("监控事件监听器异常: %v", r)
+		}
+	}()
+	fn(event.eventType, event.data)
 }
 
 func (eb *EventBus) AddListener(fn func(eventType string, data interface{})) {
@@ -51,20 +84,24 @@ func (eb *EventBus) AddListener(fn func(eventType string, data interface{})) {
 }
 
 func (eb *EventBus) emit(eventType string, data interface{}) {
-	// 进度对象按值传递，避免监听方异步读取时与后续写入产生数据竞争
+	// 进度对象按值传递，避免监听方读取时与后续写入产生数据竞争
 	if p, ok := data.(*TaskProgress); ok && p != nil {
 		cp := *p
 		cp.Logs = make([]string, len(p.Logs))
 		copy(cp.Logs, p.Logs)
 		data = &cp
 	}
-	eb.mu.RLock()
-	listeners := make([]func(eventType string, data interface{}), len(eb.listeners))
-	copy(listeners, eb.listeners)
-	eb.mu.RUnlock()
-	// 同步派发，保证日志与状态按产生顺序到达前端
-	for _, fn := range listeners {
-		fn(eventType, data)
+	event := busEvent{eventType: eventType, data: data}
+	select {
+	case eb.eventCh <- event:
+	default:
+		// 日志洪峰时丢弃普通日志，状态事件最多等待 50ms，防止任务协程卡住
+		if eventType == "progress_update" {
+			select {
+			case eb.eventCh <- event:
+			case <-time.After(50 * time.Millisecond):
+			}
+		}
 	}
 }
 

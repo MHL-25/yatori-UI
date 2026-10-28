@@ -4,6 +4,7 @@ import (
 	"encoding/json"
 	"fmt"
 	"strconv"
+	"strings"
 	"sync"
 	"time"
 
@@ -13,11 +14,11 @@ import (
 	"yatori-UI/internal/entity"
 	"yatori-UI/internal/monitor"
 	"yatori-UI/internal/studyplan"
+	"yatori-UI/internal/yinghuahelper"
 
 	"github.com/yatori-dev/yatori-go-core/aggregation/xuexitong"
 	"github.com/yatori-dev/yatori-go-core/aggregation/yinghua"
 	xuexitongApi "github.com/yatori-dev/yatori-go-core/api/xuexitong"
-	yinghuaApi "github.com/yatori-dev/yatori-go-core/api/yinghua"
 )
 
 var checkLocks sync.Map // map[string]*sync.Mutex
@@ -30,7 +31,14 @@ func lockOf(uid string) func() {
 }
 
 // Check 对单个账号执行课程质检
-func Check(uid string, setting config.Setting) (*entity.CheckReport, error) {
+func Check(uid string, setting config.Setting) (report *entity.CheckReport, err error) {
+	// 质检入口兜底：核心接口返回异常数据时只让当前账号质检失败，不影响程序
+	defer func() {
+		if r := recover(); r != nil {
+			report = nil
+			err = fmt.Errorf("质检异常: %v", r)
+		}
+	}()
 	unlock := lockOf(uid)
 	defer unlock()
 
@@ -41,7 +49,7 @@ func Check(uid string, setting config.Setting) (*entity.CheckReport, error) {
 	if user == nil {
 		return nil, fmt.Errorf("账号不存在")
 	}
-	report := &entity.CheckReport{
+	report = &entity.CheckReport{
 		Uid:         uid,
 		AccountName: user.DisplayName(),
 		CheckedAt:   time.Now(),
@@ -222,35 +230,47 @@ func Check(uid string, setting config.Setting) (*entity.CheckReport, error) {
 	return report, nil
 }
 
-// checkYingHua 英华学堂课程质检：课程列表 + 章节节点 + 锁定/进度
+// checkYingHua 英华学堂课程质检：课程列表 + 章节节点 + 锁定/进度（支持同一账号多个平台URL）
 func checkYingHua(user *entity.UserPO, report *entity.CheckReport, setting config.Setting) {
 	uid := user.Uid
-	cache, err := loginYingHua(user.Url, user.Account, user.Password)
-	if err != nil {
-		monitor.GlobalEventBus.SetError(uid, "质检登录失败: "+err.Error())
+	cfg := yingHuaUserConfig(user)
+	targets := yinghuahelper.Targets(cfg)
+	if len(targets) == 0 {
+		monitor.GlobalEventBus.SetError(uid, "质检登录失败: 未配置英华平台URL")
 		report.Courses = append(report.Courses, entity.CheckCourse{
 			CourseName: "登录失败",
-			Reason:     err.Error(),
+			Reason:     "未配置英华平台URL",
 		})
 		report.TotalCourses = 1
 		return
 	}
-	monitor.GlobalEventBus.AddLog(uid, "🔑 英华登录成功")
-
-	courses, err := yinghua.CourseListAction(cache)
-	if err != nil {
-		monitor.GlobalEventBus.SetError(uid, "拉取课程失败: "+err.Error())
-		report.Courses = append(report.Courses, entity.CheckCourse{
-			CourseName: "拉取课程失败",
-			Reason:     err.Error(),
-		})
-		report.TotalCourses = 1
-		return
-	}
-	monitor.GlobalEventBus.AddLog(uid, fmt.Sprintf("📚 质检课程数: %d", len(courses)))
 
 	now := time.Now()
-	for _, course := range courses {
+	for _, target := range targets {
+		host := yinghuahelper.Host(target.URL)
+		cache, err := yinghuahelper.LoginTarget(target, user.Account, cfg.IsProxy == 1)
+		if err != nil {
+			monitor.GlobalEventBus.SetError(uid, "["+host+"] 质检登录失败: "+err.Error())
+			report.Courses = append(report.Courses, entity.CheckCourse{
+				CourseName: "[" + host + "] 登录失败",
+				Reason:     err.Error(),
+			})
+			continue
+		}
+		monitor.GlobalEventBus.AddLog(uid, "🔑 英华登录成功: "+host)
+
+		courses, err := yinghua.CourseListAction(cache)
+		if err != nil {
+			monitor.GlobalEventBus.SetError(uid, "["+host+"] 拉取课程失败: "+err.Error())
+			report.Courses = append(report.Courses, entity.CheckCourse{
+				CourseName: "[" + host + "] 拉取课程失败",
+				Reason:     err.Error(),
+			})
+			continue
+		}
+		monitor.GlobalEventBus.AddLog(uid, fmt.Sprintf("📚 [%s] 质检课程数: %d", host, len(courses)))
+
+		for _, course := range courses {
 		cc := entity.CheckCourse{
 			CourseID:   course.Id,
 			CourseName: course.Name,
@@ -351,6 +371,7 @@ func checkYingHua(user *entity.UserPO, report *entity.CheckReport, setting confi
 			monitor.GlobalEventBus.AddLog(uid, "⚠️ 保存定时开放记录失败: "+err.Error())
 		}
 		monitor.GlobalEventBus.AddLog(uid, fmt.Sprintf("📗 [%s] 进度 %.1f%% | 可学习: %v", course.Name, cc.JobRate, cc.CanStudy))
+		}
 	}
 
 	report.TotalCourses = len(report.Courses)
@@ -372,16 +393,19 @@ func normalizeYingHuaProgress(progress float64) float64 {
 	return progress
 }
 
-func loginYingHua(url, account, password string) (*yinghuaApi.YingHuaUserCache, error) {
-	cache := &yinghuaApi.YingHuaUserCache{
-		PreUrl:   url,
-		Account:  account,
-		Password: password,
+// yingHuaUserConfig 将账号数据库记录还原为英华登录配置（含多平台URL）
+func yingHuaUserConfig(user *entity.UserPO) config.User {
+	var cfg config.User
+	if err := json.Unmarshal([]byte(user.UserConfigJson), &cfg); err != nil {
+		cfg = config.User{}
 	}
-	if yinghua.IsYingHuaCookieOrToken(password) {
-		return cache, yinghua.YingHuaCookieLoginAction(cache)
+	cfg.AccountType = user.AccountType
+	cfg.Account = user.Account
+	cfg.Password = user.Password
+	if cfg.URL == "" {
+		cfg.URL = user.Url
 	}
-	return cache, yinghua.YingHuaLoginAction(cache)
+	return cfg
 }
 
 func save(report *entity.CheckReport) {
@@ -425,22 +449,25 @@ func CourseList(uid string, setting config.Setting) ([]entity.CourseBrief, error
 		return nil, fmt.Errorf("账号不存在")
 	}
 	if user.AccountType == "YINGHUA" {
-		cache, err := loginYingHua(user.Url, user.Account, user.Password)
-		if err != nil {
-			return nil, err
+		cfg := yingHuaUserConfig(user)
+		caches, failures := yinghuahelper.LoginAccount(user.Account, cfg)
+		if len(caches) == 0 {
+			return nil, fmt.Errorf("登录失败: %s", strings.Join(failures, "; "))
 		}
-		courses, err := yinghua.CourseListAction(cache)
-		if err != nil {
-			return nil, err
-		}
-		result := make([]entity.CourseBrief, 0, len(courses))
-		for _, c := range courses {
-			result = append(result, entity.CourseBrief{
-				CourseID:   c.Id,
-				CourseName: c.Name,
-				JobRate:    normalizeYingHuaProgress(c.Progress),
-				IsStart:    true,
-			})
+		result := make([]entity.CourseBrief, 0)
+		for _, cache := range caches {
+			courses, err := yinghua.CourseListAction(cache)
+			if err != nil {
+				continue
+			}
+			for _, c := range courses {
+				result = append(result, entity.CourseBrief{
+					CourseID:   c.Id,
+					CourseName: c.Name,
+					JobRate:    normalizeYingHuaProgress(c.Progress),
+					IsStart:    true,
+				})
+			}
 		}
 		return result, nil
 	}
@@ -470,25 +497,39 @@ func CourseList(uid string, setting config.Setting) ([]entity.CourseBrief, error
 // CourseListByCredentials 使用表单中的账号密码临时登录并查询课程，不写入数据库。
 func CourseListByCredentials(req entity.CourseQueryRequest) ([]entity.CourseBrief, error) {
 	if req.AccountType == "YINGHUA" {
-		if req.Account == "" || req.Password == "" {
-			return nil, fmt.Errorf("请先填写账号和密码/Cookie")
+		if req.Account == "" {
+			return nil, fmt.Errorf("请先填写账号")
 		}
-		cache, err := loginYingHua(req.URL, req.Account, req.Password)
-		if err != nil {
-			return nil, fmt.Errorf("登录失败: %w", err)
+		cfg := config.User{
+			AccountType: "YINGHUA",
+			URL:         req.URL,
+			Account:     req.Account,
+			Password:    req.Password,
 		}
-		courses, err := yinghua.CourseListAction(cache)
-		if err != nil {
-			return nil, err
+		for _, item := range req.YingHuaUrls {
+			cfg.YingHuaUrls = append(cfg.YingHuaUrls, config.YingHuaPlatform{URL: item.URL, Password: item.Password})
 		}
-		result := make([]entity.CourseBrief, 0, len(courses))
-		for _, c := range courses {
-			result = append(result, entity.CourseBrief{
-				CourseID:   c.Id,
-				CourseName: c.Name,
-				JobRate:    normalizeYingHuaProgress(c.Progress),
-				IsStart:    true,
-			})
+		if len(yinghuahelper.Targets(cfg)) == 0 {
+			return nil, fmt.Errorf("请先填写平台URL")
+		}
+		caches, failures := yinghuahelper.LoginAccount(req.Account, cfg)
+		if len(caches) == 0 {
+			return nil, fmt.Errorf("登录失败: %s", strings.Join(failures, "; "))
+		}
+		result := make([]entity.CourseBrief, 0)
+		for _, cache := range caches {
+			courses, err := yinghua.CourseListAction(cache)
+			if err != nil {
+				continue
+			}
+			for _, c := range courses {
+				result = append(result, entity.CourseBrief{
+					CourseID:   c.Id,
+					CourseName: c.Name,
+					JobRate:    normalizeYingHuaProgress(c.Progress),
+					IsStart:    true,
+				})
+			}
 		}
 		return result, nil
 	}

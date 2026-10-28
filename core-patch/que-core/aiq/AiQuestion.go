@@ -1,4 +1,4 @@
-package aiq
+﻿package aiq
 
 // AI答题
 
@@ -10,6 +10,7 @@ import (
 	"io/ioutil"
 	"log"
 	"net/http"
+	"runtime"
 	"strings"
 	"time"
 
@@ -73,8 +74,19 @@ func BuildTextContentItems(text string, images []string) []MessageContent {
 	return items
 }
 
-// AiSem 限制同时并发的 AI 调用数量（容量=2）
-var AiSem = make(chan struct{}, 2)
+// AiSem 限制同时并发的 AI 调用数量，按 CPU 核数自适应，避免多账号互相排队
+func aiConcurrencyLimit() int {
+	n := runtime.NumCPU()
+	if n < 4 {
+		n = 4
+	}
+	if n > 12 {
+		n = 12
+	}
+	return n
+}
+
+var AiSem = make(chan struct{}, aiConcurrencyLimit())
 
 // AggregationAIApi 聚合所有AI接口，直接通过aiType判断然后返回内容
 func AggregationAIApi(url,

@@ -4,7 +4,7 @@
   <p>一款基于 Wails v2 框架构建的跨平台桌面端智能网课辅助工具</p>
   
   <div style="margin: 20px 0;">
-    <img src="https://img.shields.io/badge/Version-1.2.15-blue.svg?style=flat-square" alt="Version">
+    <img src="https://img.shields.io/badge/Version-1.2.19-blue.svg?style=flat-square" alt="Version">
     <img src="https://img.shields.io/badge/Go-1.24.0-00ADD8.svg?style=flat-square&logo=go" alt="Go">
     <img src="https://img.shields.io/badge/Wails-v2.11.0-FF6B6B.svg?style=flat-square" alt="Wails">
     <img src="https://img.shields.io/badge/React-18.2-61DAFB.svg?style=flat-square&logo=react" alt="React">
@@ -27,7 +27,15 @@
 
 **Yatori-UI** 核心代码由 [yatori-dev/yatori-go-console](https://github.com/yatori-dev/yatori-go-console) 作者：Yatori-Dev 提供
 
-**Yatori-UI** 是一款基于 [Wails v2](https://wails.io/) 框架构建的跨平台桌面端智能网课辅助工具。它将强大的 Go 后端与现代化的 React 前端融为一体，提供流畅的图形化操作体验，支持多个主流在线学习平台的自动学习、自动答题等功能。
+**Yatori-UI** 是一款基于 [Wails v2](https://wails.io/) 框架构建的跨平台桌面端智能网课辅助工具。它将强大的 Go 后端与现代化的 React 前端融为一体，提供流畅的图形化操作体验，支持学习通、英华学堂、仓辉实训、智慧职教、青书学堂、WeLearn 等多个主流在线学习平台的自动学习、自动答题与课程质检。
+
+### 🆕 v1.2.19 更新亮点
+
+- **英华多平台 URL**：同一个英华账号可同时配置多个学校平台地址，不再需要重复添加多个账号。
+- **账号密码自动登录**：只需填写账号和密码，程序自动识别验证码并抓取各平台 Cookie；登录失败会自动重新抓取，账号或密码错误不会反复重试。
+- **平台独立密码**：各学校平台密码不同时可逐平台填写；密码一致时使用“统一密码按钮”一键套用。
+- **多账号稳定性**：完善异常隔离、事件派发与运行时自适应，多账号并发更稳定、界面更流畅。
+- **答题与图片分流**：题目含图片时优先使用识图 AI，纯文本题目使用文本 AI；填空题按空位严格解析，避免错填。
 
 ### ✨ 核心优势
 
@@ -62,6 +70,9 @@
 | 互动测验 | ✅ | 学习通视频弹题自动识别并提交答案 |
 | 启动次数赞助提示 | ✅ | 达到伪随机次数时提示，可关闭或不再提示 |
 | 多账号并发自检 | ✅ | 启动自动质检最多 5 个账号同时处理 |
+| 英华多平台 URL | ✅ | 同一账号可配置多个学校平台，自动登录并抓取 Cookie |
+| 平台独立密码 | ✅ | 每个平台可单独设置密码，密码一致时支持统一密码 |
+| 图片题识别分流 | ✅ | 含图片题目走识图 AI，纯文本题目走文本 AI |
 
 ---
 
@@ -85,7 +96,7 @@
     </tr>
     <tr>
       <td>🎓 英华学堂</td>
-      <td>支持暴力模式（会被检测到）</td>
+      <td>支持账号密码自动识别验证码登录、同一账号配置多个平台 URL、每个平台独立密码，以及暴力模式（会被检测到）</td>
       <td>✅ 已完成</td>
     </tr>
     <tr>
@@ -301,40 +312,38 @@ wails dev
 
 ```
 yatori-UI/
-├── app.go                      # Wails 应用入口
+├── app.go                      # Wails 应用入口与自动化调度
 ├── main.go                     # 主程序入口
 ├── wails.json                  # Wails 配置文件
 ├── go.mod                      # Go 依赖管理
 ├── go.sum                      # Go 依赖校验
 ├── internal/                   # 内部包
-│   ├── activity/               # 平台活动实现
-│   │   └── activity.go         # 所有平台的刷课逻辑
-│   ├── config/                 # 配置管理
-│   │   └── config.go           # 配置结构体定义
-│   ├── service/                # 服务层
-│   │   └── service.go          # 业务服务实现
-│   ├── monitor/                # 监控模块
-│   │   └── event_bus.go        # 事件总线实现
-│   └── database/               # 数据库模块
-│       ├── db.go               # 数据库初始化
-│       └── entity/             # 数据实体
+│   ├── activity/               # 各平台刷课逻辑与多平台会话管理
+│   ├── checker/                # 课程质检与登录校验
+│   ├── config/                 # 配置结构与英华多平台目标解析
+│   ├── dao/                    # SQLite 数据访问
+│   ├── entity/                 # 数据实体与请求模型
+│   ├── monitor/                # 进度与日志事件总线
+│   ├── runtimecfg/             # CPU/内存自适应运行时配置
+│   ├── service/                # 账号、任务与配置业务服务
+│   ├── studyplan/              # 前置任务与定时开放分析
+│   ├── yinghuahelper/          # 英华多平台登录与 Cookie 抓取
+│   ├── email/                  # 邮件通知
+│   └── notify/                 # ShowDoc 等外部通知
+├── core-patch/                 # 核心库补丁源码（图片分流、填空解析、稳定性修复）
 ├── frontend/                   # 前端源码
 │   ├── src/
 │   │   ├── components/         # 通用组件
-│   │   ├── pages/              # 页面组件
-│   │   │   ├── AccountsPage    # 账号管理页面
-│   │   │   ├── MonitorPage     # 任务监控页面
-│   │   │   ├── SettingsPage    # 设置页面
-│   │   │   └── ...
-│   │   ├── stores/             # 状态管理
-│   │   ├── utils/              # 工具函数
+│   │   ├── pages/              # 页面组件（账号、监控、设置、质检详情等）
+│   │   ├── stores/             # Zustand 状态管理
+│   │   ├── utils/              # 工具函数与版本号
 │   │   └── App.tsx             # 应用入口组件
 │   ├── package.json            # 前端依赖
 │   └── vite.config.ts          # Vite 配置
 ├── build/                      # 构建资源
 │   ├── appicon.png             # 应用图标
 │   └── windows/                # Windows 构建配置
-├── config.yaml                 # 配置文件（运行时生成）
+├── config.yaml                 # 运行时配置文件（首次启动生成）
 └── README.md                   # 项目说明文档
 ```
 
@@ -342,31 +351,39 @@ yatori-UI/
 
 ## ⚙️ 配置说明
 
-程序运行后会在同目录下生成 `config.yaml` 配置文件，支持以下配置：
+账号与刷课配置推荐直接在软件的“账号管理”页面完成，数据保存在本地 SQLite 数据库。程序首次启动会在同目录生成 `config.yaml`，用于 AI、通知与自动化等全局设置；也支持在 `users` 中预置账号后导入。
 
 ```yaml
-# 基础配置
 setting:
   basicSetting:
-    cookie: ""                    # Cookie 登录（部分平台需要）
-    
-  # 账号列表
-  users:
-    - platformType: "XUEXITONG"  # 平台类型
-      username: "your_username"   # 用户名
-      password: "your_password"   # 密码
-      
-      # AI 答题配置（可选）
-      aiSetting:
-        aiType: "DEEPSEEK"       # AI 类型
-        apiKey: "your_api_key"   # API Key
-        apiUrl: ""               # 自定义 API 地址（可选）
-        
-      # 学习设置
-      studySetting:
-        videoModel: 1            # 视频模式：0=不刷，1=串行，2=并发课程，3=多任务点
-        autoExam: true           # 自动考试
-        autoWork: true           # 自动作业
+    autoCheckSw: 1        # 启动时自动质检
+    autoStartSw: 1        # 质检后自动开始刷课
+  aiSetting:
+    aiType: DEEPSEEK      # 文本 AI 类型
+    aiUrl: ""
+    model: ""
+    API_KEY: ""
+  visionAiSetting:
+    aiType: TONGYI        # 识图 AI（题目含图片时使用）
+    aiUrl: ""
+    model: ""
+    API_KEY: ""
+  apiQueSetting:
+    url: http://localhost:8083
+users:
+  - accountType: XUEXITONG
+    account: "your_account"
+    password: "your_password"
+    url: ""
+  - accountType: YINGHUA
+    account: "your_account"
+    password: "统一密码"
+    # 同一账号的多个学校平台，密码留空时使用统一密码
+    yingHuaUrls:
+      - url: "https://cqcst.suwankj.com/user/login"
+      - url: "https://cqcst.tuozhikj.com/user/member/pwd"
+        password: "该平台单独密码"
+      - url: "https://cqcst.chaoxiankeji.com/user/login"
 ```
 
 ### 视频模式说明

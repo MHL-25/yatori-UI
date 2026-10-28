@@ -22,6 +22,7 @@ import (
 	"yatori-UI/internal/dao"
 	"yatori-UI/internal/entity"
 	"yatori-UI/internal/monitor"
+	"yatori-UI/internal/runtimecfg"
 	"yatori-UI/internal/service"
 
 	"github.com/fsnotify/fsnotify"
@@ -44,7 +45,7 @@ type App struct {
 	launchCount  int
 }
 
-const AppVersion = "1.2.15"
+const AppVersion = "1.2.19"
 
 func NewApp() *App {
 	return &App{notified: make(map[string]time.Time)}
@@ -150,6 +151,7 @@ func (a *App) beforeClose(ctx context.Context) bool {
 
 func (a *App) startup(ctx context.Context) {
 	a.ctx = ctx
+	runtimecfg.Apply()
 
 	imageCacheDir := filepath.Join("data", "images")
 	exePath, err := os.Executable()
@@ -239,6 +241,11 @@ func (a *App) startup(ctx context.Context) {
 // startupAutomation 启动后按账号自检日期区间执行质检与自动刷课。
 // 多账号最多 5 个并发处理，避免逐个等待。
 func (a *App) startupAutomation() {
+	defer func() {
+		if r := recover(); r != nil {
+			log.Printf("启动自动化异常: %v", r)
+		}
+	}()
 	time.Sleep(3 * time.Second)
 	cfg := config.EnsureConfigFile("./config.yaml")
 	users, err := dao.QueryAllUsers()
@@ -261,6 +268,11 @@ func (a *App) startupAutomation() {
 		wg.Add(1)
 		go func() {
 			defer wg.Done()
+			defer func() {
+				if r := recover(); r != nil {
+					log.Printf("账号 %s 自动任务异常: %v", u.Uid, r)
+				}
+			}()
 			sem <- struct{}{}
 			defer func() { <-sem }()
 
@@ -299,6 +311,11 @@ func (a *App) startupAutomation() {
 
 // watchCourseLocks 每分钟检查定时开放节点，到点自动续刷对应账号
 func (a *App) watchCourseLocks() {
+	defer func() {
+		if r := recover(); r != nil {
+			log.Printf("定时开放扫描异常: %v", r)
+		}
+	}()
 	ticker := time.NewTicker(time.Minute)
 	defer ticker.Stop()
 	for {
@@ -322,6 +339,11 @@ func (a *App) watchCourseLocks() {
 				wg.Add(1)
 				go func() {
 					defer wg.Done()
+					defer func() {
+						if r := recover(); r != nil {
+							log.Printf("账号 %s 定时续刷异常: %v", uid, r)
+						}
+					}()
 					sem <- struct{}{}
 					defer func() { <-sem }()
 
@@ -490,6 +512,11 @@ func (a *App) initSystray() {
 }
 
 func (a *App) watchConfigFile() {
+	defer func() {
+		if r := recover(); r != nil {
+			log.Printf("配置文件监听异常: %v", r)
+		}
+	}()
 	configPath := "config.yaml"
 	absPath, err := filepath.Abs(configPath)
 	if err != nil {
@@ -561,12 +588,17 @@ func (a *App) watchConfigFile() {
 					if user.CoursesCustom.CxExamSw != nil {
 						ccData.CxExamSw = *user.CoursesCustom.CxExamSw
 					}
+					yingHuaUrls := make([]entity.YingHuaUrlItem, 0, len(user.YingHuaUrls))
+					for _, item := range user.YingHuaUrls {
+						yingHuaUrls = append(yingHuaUrls, entity.YingHuaUrlItem{URL: item.URL, Password: item.Password})
+					}
 					req := entity.AddAccountRequest{
 						AccountType:   user.AccountType,
 						Url:           user.URL,
 						RemarkName:    user.RemarkName,
 						Account:       user.Account,
 						Password:      user.Password,
+						YingHuaUrls:   yingHuaUrls,
 						IsProxy:       user.IsProxy,
 						InformEmails:  user.InformEmails,
 						ShowDocSw:     user.ShowDocSw,

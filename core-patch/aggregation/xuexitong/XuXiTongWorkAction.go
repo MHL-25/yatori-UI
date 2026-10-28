@@ -4,7 +4,6 @@ import (
 	"bytes"
 	"errors"
 	"fmt"
-	"log"
 	"net/url"
 	"regexp"
 	"strconv"
@@ -59,7 +58,7 @@ func PullWorkListAction(cache *xuexitong.XueXiTUserCache, course XueXiTCourse) (
 	}
 	doc, err := goquery.NewDocumentFromReader(strings.NewReader(examListHtml))
 	if err != nil {
-		log.Fatal(err)
+		return examList, fmt.Errorf("作业列表页面解析失败: %v", err)
 	}
 
 	// 遍历所有 <li>
@@ -136,7 +135,7 @@ func EnterWorkAction(cache *xuexitong.XueXiTUserCache, exam *XXTWork) error {
 
 	doc, err := goquery.NewDocumentFromReader(strings.NewReader(enterHtml))
 	if err != nil {
-		log.Fatal(err)
+		return fmt.Errorf("作业进入页面解析失败: %v", err)
 	}
 	type HiddenField struct {
 		ID    string
@@ -367,7 +366,9 @@ func (question *XXTWorkQuestion) WriteQuestionForExternalAction(exUrl string) {
 	//赋值选项
 	request, err := external.ApiQueRequest(question.Question, exUrl, 5, nil)
 	if err != nil {
-		log.Fatal(err)
+		log2.Print(log2.INFO, "外置题库请求失败，已使用默认答案A:", err.Error())
+		question.Question.Answers = []string{"A"}
+		return
 	}
 	//赋值答案
 	var answers []string
@@ -422,7 +423,7 @@ func HtmlWorkQuestionTurnEntity(paperHtml string) (XXTWorkQuestion, error) {
 	// 使用 goquery 解析 HTML
 	paperDoc, err := goquery.NewDocumentFromReader(bytes.NewReader([]byte(paperHtml)))
 	if err != nil {
-		log.Fatal(err)
+		return question, fmt.Errorf("作业题目页面解析失败: %v", err)
 	}
 	questionId, exists := paperDoc.Find("#questionId").Attr("value") //题目id
 	if exists {

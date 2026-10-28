@@ -3,6 +3,7 @@ package service
 import (
 	"encoding/json"
 	"fmt"
+	"strings"
 	"yatori-UI/internal/activity"
 	"yatori-UI/internal/checker"
 	"yatori-UI/internal/config"
@@ -30,6 +31,21 @@ func GetAccountList() ([]entity.UserPO, error) {
 	return users, nil
 }
 
+func toYingHuaPlatforms(items []entity.YingHuaUrlItem) []config.YingHuaPlatform {
+	if len(items) == 0 {
+		return nil
+	}
+	result := make([]config.YingHuaPlatform, 0, len(items))
+	for _, item := range items {
+		url := strings.TrimSpace(item.URL)
+		if url == "" {
+			continue
+		}
+		result = append(result, config.YingHuaPlatform{URL: url, Password: strings.TrimSpace(item.Password)})
+	}
+	return result
+}
+
 func AddAccount(req entity.AddAccountRequest) (*entity.UserPO, error) {
 	existing, err := dao.QueryUserByAccount(req.AccountType, req.Account)
 	if err != nil {
@@ -40,10 +56,15 @@ func AddAccount(req entity.AddAccountRequest) (*entity.UserPO, error) {
 	}
 
 	uuidV7, _ := uuid.NewV7()
+	platforms := toYingHuaPlatforms(req.YingHuaUrls)
+	rootUrl := req.Url
+	if rootUrl == "" && len(platforms) > 0 {
+		rootUrl = platforms[0].URL
+	}
 	userPO := entity.UserPO{
 		Uid:         uuidV7.String(),
 		AccountType: req.AccountType,
-		Url:         req.Url,
+		Url:         rootUrl,
 		RemarkName:  req.RemarkName,
 		Account:     req.Account,
 		Password:    req.Password,
@@ -85,10 +106,11 @@ func AddAccount(req entity.AddAccountRequest) (*entity.UserPO, error) {
 
 	userConfig := config.User{
 		AccountType:   req.AccountType,
-		URL:           req.Url,
+		URL:           rootUrl,
 		RemarkName:    req.RemarkName,
 		Account:       req.Account,
 		Password:      req.Password,
+		YingHuaUrls:   platforms,
 		IsProxy:       req.IsProxy,
 		InformEmails:  req.InformEmails,
 		ShowDocSw:     req.ShowDocSw,
@@ -159,6 +181,12 @@ func UpdateAccount(req entity.UpdateAccountRequest) error {
 
 	if req.AccountType != "" { existingConfig.AccountType = req.AccountType }
 	if req.Url != "" { existingConfig.URL = req.Url }
+	if req.YingHuaUrls != nil {
+		existingConfig.YingHuaUrls = toYingHuaPlatforms(req.YingHuaUrls)
+		if existingConfig.URL == "" && len(existingConfig.YingHuaUrls) > 0 {
+			existingConfig.URL = existingConfig.YingHuaUrls[0].URL
+		}
+	}
 	if req.RemarkName != "" { existingConfig.RemarkName = req.RemarkName }
 	if req.Account != "" { existingConfig.Account = req.Account }
 	if req.Password != "" { existingConfig.Password = req.Password }
@@ -194,7 +222,14 @@ func UpdateAccount(req entity.UpdateAccountRequest) error {
 	userConfigJson, _ := json.Marshal(existingConfig)
 	updateData["user_config_json"] = string(userConfigJson)
 
-	return dao.UpdateUser(req.Uid, updateData)
+	if err := dao.UpdateUser(req.Uid, updateData); err != nil {
+		return err
+	}
+	// 配置变更后丢弃旧会话，避免沿用旧的单URL/旧密码缓存
+	if act := activity.GetActivity(req.Uid); act != nil && !act.IsRunning() {
+		activity.PutActivity(req.Uid, nil)
+	}
+	return nil
 }
 
 func getSetting() config.Setting {

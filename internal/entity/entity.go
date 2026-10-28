@@ -119,10 +119,17 @@ type CourseBrief struct {
 
 // CourseQueryRequest 使用表单中的账号密码临时查询课程（不保存账号）
 type CourseQueryRequest struct {
-	AccountType string `json:"accountType"`
-	URL         string `json:"url"`
-	Account     string `json:"account"`
-	Password    string `json:"password"`
+	AccountType string               `json:"accountType"`
+	URL         string               `json:"url"`
+	Account     string               `json:"account"`
+	Password    string               `json:"password"`
+	YingHuaUrls []YingHuaUrlItem     `json:"yingHuaUrls,omitempty"`
+}
+
+// YingHuaUrlItem 英华多平台入口（密码为空时使用统一密码）
+type YingHuaUrlItem struct {
+	URL      string `json:"url"`
+	Password string `json:"password,omitempty"`
 }
 
 type AddAccountRequest struct {
@@ -131,6 +138,7 @@ type AddAccountRequest struct {
 	RemarkName     string            `json:"remarkName"`
 	Account        string            `json:"account"`
 	Password       string            `json:"password"`
+	YingHuaUrls    []YingHuaUrlItem  `json:"yingHuaUrls,omitempty"`
 	IsProxy        int               `json:"isProxy"`
 	InformEmails   []string          `json:"informEmails"`
 	ShowDocSw      int               `json:"showDocSw"`
@@ -145,6 +153,7 @@ type UpdateAccountRequest struct {
 	RemarkName     string            `json:"remarkName"`
 	Account        string            `json:"account"`
 	Password       string            `json:"password"`
+	YingHuaUrls    []YingHuaUrlItem  `json:"yingHuaUrls,omitempty"`
 	IsProxy        int               `json:"isProxy"`
 	InformEmails   []string          `json:"informEmails"`
 	ShowDocSw      int               `json:"showDocSw"`

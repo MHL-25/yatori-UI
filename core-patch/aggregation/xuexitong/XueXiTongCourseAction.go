@@ -5,7 +5,6 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
-	"log"
 	"sort"
 	"strconv"
 	"strings"
@@ -112,10 +111,15 @@ func XueXiTPullCourseAction(cache *xuexitong.XueXiTUserCache) ([]XueXiTCourse, e
 			teacher = v.Teacherfactor
 			courseName = v.Name
 			courseDataID = v.Id
-			userID := strings.Split(v.CourseSquareUrl, "userId=")[1]
-			cache.UserID = userID
-			classId = strings.Split(strings.Split(v.CourseSquareUrl, "classId=")[1], "&userId")[0]
-			courseID = strings.Split(strings.Split(v.CourseSquareUrl, "courseId=")[1], "&personId")[0]
+			if userID := extractCourseUrlParam(v.CourseSquareUrl, "userId"); userID != "" {
+				cache.UserID = userID
+			}
+			if cid := extractCourseUrlParam(v.CourseSquareUrl, "classId"); cid != "" {
+				classId = cid
+			}
+			if cid := extractCourseUrlParam(v.CourseSquareUrl, "courseId"); cid != "" {
+				courseID = cid
+			}
 			courseImage = v.Imageurl
 		}
 
@@ -212,7 +216,11 @@ func PullCourseChapterAction(cache *xuexitong.XueXiTUserCache, cpi, key int) (ch
 	// 解析 JSON 数据为 map 切片
 	var chapterData []map[string]interface{}
 	if err := json.Unmarshal(chapterMapJson, &chapterData); err != nil {
-		log.Fatalf("Error parsing JSON: %v", err)
+		return ChaptersList{}, false, fmt.Errorf("章节数据解析失败: %v", err)
+	}
+	// 服务端限流或课程无章节时 data 可能为空数组，必须先判空再访问 chapterData[0]
+	if len(chapterData) == 0 {
+		return ChaptersList{}, false, errors.New("[" + cache.Name + "] " + "[" + chaptersList.ChatID + "] " + " 章节数据为空（服务端可能限流）")
 	}
 	var chatid string
 	if v, ok1 := chapterData[0]["chatid"].(string); ok1 {
@@ -332,6 +340,20 @@ func (c *KnowledgeItem) updatePointStatus(chapterPoint ChapterPointDTO) {
 	}
 	c.PointFinished = pointData.FinishCount
 	c.PointLock = pointData.OpenLock
+}
+
+// extractCourseUrlParam 从课程链接中安全提取参数，字段缺失时返回空串而不是 panic
+func extractCourseUrlParam(raw, key string) string {
+	marker := key + "="
+	index := strings.Index(raw, marker)
+	if index < 0 {
+		return ""
+	}
+	rest := raw[index+len(marker):]
+	if end := strings.IndexAny(rest, "&#"); end >= 0 {
+		rest = rest[:end]
+	}
+	return rest
 }
 
 // ChapterFetchPointAction 对应章节的作业点信息 刷新KnowledgeItem中对应节点完成状态

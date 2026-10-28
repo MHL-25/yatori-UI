@@ -13,7 +13,7 @@ import (
 var GlobalDB *gorm.DB
 
 func InitDB(dbPath string) error {
-	db, err := gorm.Open(sqlite.Open(dbPath+"?_journal_mode=WAL&_busy_timeout=5000"), &gorm.Config{
+	db, err := gorm.Open(sqlite.Open(dbPath+"?_journal_mode=WAL&_busy_timeout=15000&_synchronous=NORMAL&_cache_size=-20000"), &gorm.Config{
 		Logger: logger.Default.LogMode(logger.Silent),
 	})
 	if err != nil {
@@ -28,7 +28,7 @@ func InitDB(dbPath string) error {
 		return err
 	}
 	sqlDB.SetMaxIdleConns(10)
-	sqlDB.SetMaxOpenConns(100)
+	sqlDB.SetMaxOpenConns(20)
 	sqlDB.SetConnMaxLifetime(time.Hour)
 	GlobalDB = db
 	return nil

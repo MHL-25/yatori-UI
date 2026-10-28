@@ -6,12 +6,16 @@ import (
 	"os"
 	"path/filepath"
 	"strings"
+	"sync"
 	"time"
 
 	"github.com/spf13/viper"
 	"github.com/yatori-dev/yatori-go-core/models/ctype"
 	"go.yaml.in/yaml/v3"
 )
+
+// viper 是全局单例且非并发安全，多账号读取配置时必须串行
+var configMu sync.Mutex
 
 type JSONDataForConfig struct {
 	Setting Setting `json:"setting"`
@@ -94,18 +98,52 @@ type CoursesCustom struct {
 	CxRetakeRate   int `json:"cxRetakeRate" yaml:"cxRetakeRate"`
 }
 
+// YingHuaPlatform 英华学堂单个平台入口，密码留空时使用账号统一密码
+type YingHuaPlatform struct {
+	URL      string `json:"url" yaml:"url"`
+	Password string `json:"password,omitempty" yaml:"password,omitempty"`
+}
+
 type User struct {
 	AccountType   string        `json:"accountType" yaml:"accountType"`
 	URL           string        `json:"url"`
 	RemarkName    string        `json:"remarkName,omitempty" yaml:"remarkName,omitempty" mapstructure:"remarkName"`
 	Account       string        `json:"account"`
 	Password      string        `json:"password"`
-	IsProxy       int           `json:"isProxy" yaml:"isProxy"`
-	InformEmails  []string      `json:"informEmails" yaml:"informEmails"`
-	CoursesCustom CoursesCustom `json:"coursesCustom" yaml:"coursesCustom"`
+	// 英华多平台入口：同一账号可同时登录多个学校站点，密码留空时回退到 Password
+	YingHuaUrls  []YingHuaPlatform `json:"yingHuaUrls,omitempty" yaml:"yingHuaUrls,omitempty"`
+	IsProxy      int               `json:"isProxy" yaml:"isProxy"`
+	InformEmails []string          `json:"informEmails" yaml:"informEmails"`
+	CoursesCustom CoursesCustom     `json:"coursesCustom" yaml:"coursesCustom"`
 	// ShowDoc 推送（账号级独立开关，可多个地址）
 	ShowDocSw   int      `json:"showDocSw" yaml:"showDocSw"`
 	ShowDocUrls []string `json:"showDocUrls" yaml:"showDocUrls"`
+}
+
+// YingHuaLoginTargets 解析英华实际需要登录的平台列表（去重并回退统一密码）
+func (u User) YingHuaLoginTargets() []YingHuaPlatform {
+	seen := make(map[string]bool)
+	targets := make([]YingHuaPlatform, 0, len(u.YingHuaUrls)+1)
+	for _, item := range u.YingHuaUrls {
+		url := strings.TrimSpace(item.URL)
+		if url == "" {
+			continue
+		}
+		key := strings.ToLower(strings.TrimRight(url, "/"))
+		if seen[key] {
+			continue
+		}
+		seen[key] = true
+		password := strings.TrimSpace(item.Password)
+		if password == "" {
+			password = u.Password
+		}
+		targets = append(targets, YingHuaPlatform{URL: url, Password: password})
+	}
+	if len(targets) == 0 && strings.TrimSpace(u.URL) != "" {
+		targets = append(targets, YingHuaPlatform{URL: strings.TrimSpace(u.URL), Password: u.Password})
+	}
+	return targets
 }
 
 func defaultValue(config *JSONDataForConfig) {
@@ -127,6 +165,8 @@ func defaultValue(config *JSONDataForConfig) {
 }
 
 func ReadConfig(filePath string) JSONDataForConfig {
+	configMu.Lock()
+	defer configMu.Unlock()
 	var configJson JSONDataForConfig
 	viper.SetConfigName("config")
 	viper.SetConfigType("yaml")
@@ -151,6 +191,8 @@ func ReadConfig(filePath string) JSONDataForConfig {
 }
 
 func SaveConfig(config *JSONDataForConfig, filePath string) error {
+	configMu.Lock()
+	defer configMu.Unlock()
 	data, err := yaml.Marshal(config)
 	if err != nil {
 		return err

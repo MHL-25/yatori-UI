@@ -68,6 +68,50 @@ const DisclaimerModal: React.FC<DisclaimerModalProps> = ({ onAccept, readOnly, o
           </div>
 
           <div className="border-t border-dark-700 pt-4">
+            <h3 className="text-accent-400 font-bold text-base mb-3">v1.2.19 更新内容</h3>
+            <ul className="list-disc list-inside space-y-1.5 text-dark-300">
+              <li>【新增】英华学堂支持一个账号配置多个平台 URL，同一账号不再需要重复添加多个账号</li>
+              <li>【新增】只需填写账号和密码，程序自动识别验证码并抓取各平台登录 Cookie</li>
+              <li>【新增】每个平台可单独填写密码，密码一致时可使用“统一密码按钮”一键套用</li>
+              <li>【优化】平台登录失败自动重新抓取 Cookie；账号或密码错误时只记录错误，不会反复重试</li>
+              <li>【优化】英华质检与刷课会自动汇总所有平台的课程，并在日志中标注平台域名</li>
+              <li>【修复】修改账号配置后会丢弃旧会话，避免继续沿用旧 URL 或旧密码缓存</li>
+            </ul>
+          </div>
+
+          <div className="border-t border-dark-700 pt-4">
+            <h3 className="text-accent-400 font-bold text-base mb-3">v1.2.18 更新内容</h3>
+            <ul className="list-disc list-inside space-y-1.5 text-dark-300">
+              <li>【修复】定位并修复“开始学习课程后 Panic: index out of range [0] with length 0”的真正根因：课程章节接口返回空 data 时，代码在判空之前读取了 chapterData[0]</li>
+              <li>【修复】预扫描与单课程学习加入异常隔离，单门课程异常只跳过该课程，不再终止整个账号任务</li>
+              <li>【修复】简答、名词解释、论述、其他题型答案数组为空时提交越界，自动跳过空答案</li>
+              <li>【优化】panic 日志附带堆栈信息，后续异常可直接定位到具体代码行</li>
+            </ul>
+          </div>
+
+          <div className="border-t border-dark-700 pt-4">
+            <h3 className="text-accent-400 font-bold text-base mb-3">v1.2.17 更新内容</h3>
+            <ul className="list-disc list-inside space-y-1.5 text-dark-300">
+              <li>【修复】多账号质检或启动时偶发 “Panic: index out of range [0] with length 0”</li>
+              <li>【修复】章节接口在并发/限流时返回空数据，不再直接读取第一个元素</li>
+              <li>【优化】课程链接参数缺失时安全解析，不再因格式异常崩溃</li>
+              <li>【优化】节点任务点状态为空时使用节点 ID 兜底，视频和作业不再越界</li>
+            </ul>
+          </div>
+
+          <div className="border-t border-dark-700 pt-4">
+            <h3 className="text-accent-400 font-bold text-base mb-3">v1.2.16 更新内容</h3>
+            <ul className="list-disc list-inside space-y-1.5 text-dark-300">
+              <li>【修复】多账号同时运行闪退：核心库运行期不再使用 log.Fatal / os.Exit，解析或请求异常只影响当前任务</li>
+              <li>【修复】课程、节点、邮件通知、定时续刷等协程全部加入异常恢复，单个账号异常不会终止整个程序</li>
+              <li>【优化】进度与日志事件改为异步单队列派发，前端每 100ms 合并刷新，多账号时界面不再卡顿</li>
+              <li>【优化】内置 AI 与外部题库并发上限按 CPU 核数自适应，AI 锁改为按账号隔离，避免账号之间互相排队</li>
+              <li>【优化】按 CPU 核数与内存自动调整 Go 运行时：GOMAXPROCS、GC 比例与内存软上限，减少卡顿和内存暴涨</li>
+              <li>【优化】SQLite 启用 WAL 优化参数并提高忙等超时，多账号同时读写更稳定</li>
+            </ul>
+          </div>
+
+          <div className="border-t border-dark-700 pt-4">
             <h3 className="text-accent-400 font-bold text-base mb-3">v1.2.15 更新内容</h3>
             <ul className="list-disc list-inside space-y-1.5 text-dark-300">
               <li>【修复】填空题把 AI 开场白、编号说明当成答案填入多个空位的问题</li>

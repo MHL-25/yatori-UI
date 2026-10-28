@@ -69,9 +69,15 @@ const SUBMIT_MODES = [
   { value: 2, label: '仅自动提交最后一题' },
 ]
 
+interface YingHuaUrlRow {
+  url: string
+  password: string
+}
+
 interface AccountFormData {
   accountType: string
   url: string
+  yingHuaUrls: YingHuaUrlRow[]
   remarkName: string
   account: string
   password: string
@@ -102,6 +108,7 @@ interface AccountFormData {
 const defaultForm: AccountFormData = {
   accountType: 'XUEXITONG',
   url: '',
+  yingHuaUrls: [],
   remarkName: '',
   account: '',
   password: '',
@@ -129,6 +136,60 @@ const defaultForm: AccountFormData = {
   cxRetakeRate: 80,
 }
 
+// 英华允许统一密码，也允许每个平台单独密码
+const hasLoginCredential = (form: AccountFormData) =>
+  Boolean(form.password) ||
+  (form.accountType === 'YINGHUA' && form.yingHuaUrls.some(row => row.url.trim() && row.password.trim()))
+
+// 英华多平台入口编辑器：每行一个学校站点，可单独设置密码
+const YingHuaUrlEditor: React.FC<{
+  form: AccountFormData
+  setForm: React.Dispatch<React.SetStateAction<AccountFormData>>
+}> = ({ form, setForm }) => {
+  const rows = form.yingHuaUrls || []
+  const updateRows = (next: YingHuaUrlRow[]) => {
+    setForm({ ...form, yingHuaUrls: next, url: next[0]?.url || '' })
+  }
+  const updateRow = (idx: number, patch: Partial<YingHuaUrlRow>) => {
+    updateRows(rows.map((row, i) => (i === idx ? { ...row, ...patch } : row)))
+  }
+  const addRow = () => updateRows([...rows, { url: '', password: '' }])
+  const removeRow = (idx: number) => updateRows(rows.filter((_, i) => i !== idx))
+
+  return (
+    <div className="space-y-2">
+      <div className="flex items-center justify-between">
+        <label className="text-xs font-medium text-dark-300">平台 URL（可添加多个学校站点）</label>
+        <button type="button" onClick={addRow} className="text-[11px] text-accent-400 hover:text-accent-300">+ 添加平台</button>
+      </div>
+      {rows.length === 0 && (
+        <p className="text-[11px] text-dark-400">请至少添加一个平台 URL，例如 https://cqcst.suwankj.com/user/login</p>
+      )}
+      {rows.map((row, idx) => (
+        <div key={idx} className="surface-sub p-2 space-y-2">
+          <div className="flex items-center gap-2">
+            <input type="text" value={row.url} onChange={e => updateRow(idx, { url: e.target.value })}
+              placeholder="https://xxx.suwankj.com/user/login" className="input-field flex-1" />
+            <button type="button" onClick={() => removeRow(idx)} title="删除该平台"
+              className="p-1.5 text-dark-400 hover:text-red-400">
+              <Trash2 size={15} />
+            </button>
+          </div>
+          <input type="password" value={row.password} onChange={e => updateRow(idx, { password: e.target.value })}
+            placeholder="该平台单独密码（留空则使用上方统一密码）" className="input-field" />
+        </div>
+      ))}
+      {rows.length > 0 && (
+        <div className="flex items-center justify-between">
+          <p className="text-[11px] text-dark-500">各平台密码一致时，直接填写上方统一密码即可。</p>
+          <button type="button" onClick={() => updateRows(rows.map(row => ({ ...row, password: '' })))}
+            className="text-[11px] text-accent-400 hover:text-accent-300 whitespace-nowrap">统一密码按钮</button>
+        </div>
+      )}
+    </div>
+  )
+}
+
 const AccountFormFields: React.FC<{
   form: AccountFormData
   setForm: React.Dispatch<React.SetStateAction<AccountFormData>>
@@ -148,8 +209,18 @@ const AccountFormFields: React.FC<{
   const [courseSelected, setCourseSelected] = useState<Set<string>>(new Set())
   const [courseLoading, setCourseLoading] = useState(false)
 
+  // 切换到英华时自动补一行平台 URL，避免空列表
+  const changePlatformType = (newType: string) => {
+    const modes = getVideoModes(newType)
+    const validMode = modes.find(m => m.value === form.videoModel) ? form.videoModel : modes[Math.min(1, modes.length - 1)].value
+    const yingHuaUrls = newType === 'YINGHUA' && form.yingHuaUrls.length === 0
+      ? [{ url: form.url, password: '' }]
+      : form.yingHuaUrls
+    setForm({ ...form, accountType: newType, videoModel: validMode, yingHuaUrls })
+  }
+
   const openCoursePicker = async (mode: 'include' | 'exclude') => {
-    if (!courseSourceUid && (!form.account || !form.password)) {
+    if (!courseSourceUid && (!form.account || !hasLoginCredential(form))) {
       alert('请先填写账号和密码，再查询课程')
       return
     }
@@ -164,6 +235,7 @@ const AccountFormFields: React.FC<{
           url: form.url,
           account: form.account,
           password: form.password,
+          yingHuaUrls: form.yingHuaUrls.filter(row => row.url.trim()),
         })
     setCourseLoading(false)
     if (!result.ok) {
@@ -192,12 +264,8 @@ const AccountFormFields: React.FC<{
       <div className="grid grid-cols-2 gap-3">
         <div>
           <label className="text-xs font-medium text-dark-300 mb-1 block">平台类型</label>
-          <select value={form.accountType} onChange={e => {
-            const newType = e.target.value
-            const modes = getVideoModes(newType)
-            const validMode = modes.find(m => m.value === form.videoModel) ? form.videoModel : modes[Math.min(1, modes.length - 1)].value
-            setForm({ ...form, accountType: newType, videoModel: validMode })
-          }} className="select-field" disabled={isEdit}>
+          <select value={form.accountType} onChange={e => changePlatformType(e.target.value)}
+            className="select-field" disabled={isEdit}>
             {PLATFORM_LIST.map(p => <option key={p.id} value={p.id}>{p.icon} {p.name}</option>)}
           </select>
         </div>
@@ -208,7 +276,7 @@ const AccountFormFields: React.FC<{
         </div>
       </div>
 
-      {needUrl && (
+      {needUrl && form.accountType !== 'YINGHUA' && (
         <div><label className="text-xs font-medium text-dark-300 mb-1 block">平台URL</label>
           <input type="text" value={form.url} onChange={e => setForm({ ...form, url: e.target.value })} placeholder="https://example.com" className="input-field" />
         </div>
@@ -218,9 +286,10 @@ const AccountFormFields: React.FC<{
         <div><label className="text-xs font-medium text-dark-300 mb-1 block">账号</label>
           <input type="text" value={form.account} onChange={e => setForm({ ...form, account: e.target.value })} placeholder="请输入账号" className="input-field" />
         </div>
-        <div><label className="text-xs font-medium text-dark-300 mb-1 block">密码 / Cookie</label>
+        <div><label className="text-xs font-medium text-dark-300 mb-1 block">{form.accountType === 'YINGHUA' ? '统一密码 / Cookie' : '密码 / Cookie'}</label>
           <div className="relative">
-            <input type={showPassword ? 'text' : 'password'} value={form.password} onChange={e => setForm({ ...form, password: e.target.value })} placeholder="请输入密码或 Cookie" className="input-field pr-10" />
+            <input type={showPassword ? 'text' : 'password'} value={form.password} onChange={e => setForm({ ...form, password: e.target.value })}
+              placeholder={form.accountType === 'YINGHUA' ? '各平台密码一致时填写这里' : '请输入密码或 Cookie'} className="input-field pr-10" />
             <button type="button" onClick={() => setShowPassword(!showPassword)}
               className="absolute right-3 top-1/2 -translate-y-1/2 text-dark-400 hover:text-dark-200"
               title={showPassword ? '隐藏密码' : '显示密码'}>
@@ -229,6 +298,15 @@ const AccountFormFields: React.FC<{
           </div>
         </div>
       </div>
+
+      {form.accountType === 'YINGHUA' && (
+        <>
+          <YingHuaUrlEditor form={form} setForm={setForm} />
+          <p className="text-[11px] text-dark-400">
+            填写登录页地址即可，程序会自动识别验证码并抓取 Cookie；某平台登录失败会自动重新抓取，账号或密码错误时不会反复重试。
+          </p>
+        </>
+      )}
         </>
       )}
 
@@ -236,12 +314,8 @@ const AccountFormFields: React.FC<{
         <div className="grid grid-cols-2 gap-3">
           <div>
             <label className="text-xs font-medium text-dark-300 mb-1 block">平台类型</label>
-            <select value={form.accountType} onChange={e => {
-              const newType = e.target.value
-              const modes = getVideoModes(newType)
-              const validMode = modes.find(m => m.value === form.videoModel) ? form.videoModel : modes[Math.min(1, modes.length - 1)].value
-              setForm({ ...form, accountType: newType, videoModel: validMode })
-            }} className="select-field" disabled={isEdit}>
+            <select value={form.accountType} onChange={e => changePlatformType(e.target.value)}
+              className="select-field" disabled={isEdit}>
               {PLATFORM_LIST.map(p => <option key={p.id} value={p.id}>{p.icon} {p.name}</option>)}
             </select>
           </div>
@@ -592,13 +666,14 @@ const AddAccountModal: React.FC<{ open: boolean; onClose: () => void }> = ({ ope
     setStep(next)
   }
 
-  const canNext = step === 1 ? Boolean(form.account && form.password) : true
+  const canNext = step === 1 ? Boolean(form.account && hasLoginCredential(form)) : true
 
   const handleSubmit = async () => {
-    if (!form.account || !form.password) return
+    if (!form.account || !hasLoginCredential(form)) return
     setLoading(true)
     const data = {
       ...form,
+      yingHuaUrls: form.yingHuaUrls.filter(row => row.url.trim()),
       coursesCustom: {
         videoModel: form.videoModel, autoExam: form.autoExam, examAutoSubmit: form.examAutoSubmit,
         cxNode: form.cxNode, cxChapterTestSw: form.cxChapterTestSw, cxWorkSw: form.cxWorkSw, cxExamSw: form.cxExamSw,
@@ -666,7 +741,10 @@ const AddAccountModal: React.FC<{ open: boolean; onClose: () => void }> = ({ ope
                     const newType = e.target.value
                     const modes = getVideoModes(newType)
                     const validMode = modes.find(m => m.value === form.videoModel) ? form.videoModel : modes[Math.min(1, modes.length - 1)].value
-                    setForm({ ...form, accountType: newType, videoModel: validMode })
+                    const yingHuaUrls = newType === 'YINGHUA' && form.yingHuaUrls.length === 0
+                      ? [{ url: '', password: '' }]
+                      : form.yingHuaUrls
+                    setForm({ ...form, accountType: newType, videoModel: validMode, yingHuaUrls })
                   }} className="select-field">
                     {PLATFORM_LIST.map(p => <option key={p.id} value={p.id}>{p.icon} {p.name}</option>)}
                   </select>
@@ -694,11 +772,13 @@ const AddAccountModal: React.FC<{ open: boolean; onClose: () => void }> = ({ ope
                     placeholder="请输入账号 / 手机号" className="input-field" />
                 </div>
                 <div>
-                  <label className="text-xs font-medium text-dark-300 mb-1 block">密码 / Cookie</label>
+                  <label className="text-xs font-medium text-dark-300 mb-1 block">
+                    {form.accountType === 'YINGHUA' ? '统一密码 / Cookie' : '密码 / Cookie'}
+                  </label>
                   <div className="relative">
                     <input type={showPassword ? 'text' : 'password'} value={form.password} onChange={e => setForm({ ...form, password: e.target.value })}
                       onKeyDown={e => { if (e.key === 'Enter' && canNext) go(2) }}
-                      placeholder="请输入密码或 Cookie" className="input-field pr-10" />
+                      placeholder={form.accountType === 'YINGHUA' ? '各平台密码一致时填写这里' : '请输入密码或 Cookie'} className="input-field pr-10" />
                     <button type="button" onClick={() => setShowPassword(!showPassword)}
                       className="absolute right-3 top-1/2 -translate-y-1/2 text-dark-400 hover:text-dark-200"
                       title={showPassword ? '隐藏密码' : '显示密码'}>
@@ -706,14 +786,18 @@ const AddAccountModal: React.FC<{ open: boolean; onClose: () => void }> = ({ ope
                     </button>
                   </div>
                 </div>
-                {['YINGHUA', 'CANGHUI', 'HQKJ'].includes(form.accountType) && (
+                {form.accountType === 'YINGHUA' ? (
+                  <>
+                    <YingHuaUrlEditor form={form} setForm={setForm} />
+                    <p className="text-[11px] text-dark-400">
+                      添加同一账号的所有学校平台 URL，程序会自动识别验证码并抓取 Cookie；平台密码不同时可在对应平台单独填写。
+                    </p>
+                  </>
+                ) : ['CANGHUI', 'HQKJ'].includes(form.accountType) && (
                   <div>
                     <label className="text-xs font-medium text-dark-300 mb-1 block">平台 URL</label>
                     <input type="text" value={form.url} onChange={e => setForm({ ...form, url: e.target.value })}
                       placeholder="https://example.com" className="input-field" />
-                    {form.accountType === 'YINGHUA' && (
-                      <p className="text-[11px] text-dark-400 mt-1">填写站点根地址即可，如 https://cdcas.suwankj.com；密码栏可直接粘贴浏览器 Cookie（含 token=）。</p>
-                    )}
                   </div>
                 )}
               </motion.div>
@@ -751,8 +835,8 @@ const AddAccountModal: React.FC<{ open: boolean; onClose: () => void }> = ({ ope
               下一步
             </button>
           ) : (
-            <button onClick={handleSubmit} disabled={loading || !form.account || !form.password}
-              className={cn('btn-primary', (loading || !form.account || !form.password) && 'opacity-50 cursor-not-allowed')}>
+            <button onClick={handleSubmit} disabled={loading || !form.account || !hasLoginCredential(form)}
+              className={cn('btn-primary', (loading || !form.account || !hasLoginCredential(form)) && 'opacity-50 cursor-not-allowed')}>
               {loading ? '添加中...' : '确认添加'}
             </button>
           )}
@@ -783,9 +867,14 @@ const EditAccountModal: React.FC<{ open: boolean; onClose: () => void; account: 
       let parsed: any = {}
       try { parsed = JSON.parse(account.userConfigJson || '{}') } catch {}
       const cc = parsed.coursesCustom || {}
+      const legacyUrl = account.url || parsed.url || ''
+      const yingHuaUrls: YingHuaUrlRow[] = Array.isArray(parsed.yingHuaUrls) && parsed.yingHuaUrls.length > 0
+        ? parsed.yingHuaUrls.map((row: any) => ({ url: row?.url || '', password: row?.password || '' }))
+        : (legacyUrl ? [{ url: legacyUrl, password: '' }] : [])
       setForm({
         accountType: account.accountType || parsed.accountType || 'XUEXITONG',
-        url: account.url || parsed.url || '',
+        url: legacyUrl,
+        yingHuaUrls,
         remarkName: account.remarkName || parsed.remarkName || '',
         account: account.account || parsed.account || '',
         password: account.password || parsed.password || '',
@@ -822,6 +911,7 @@ const EditAccountModal: React.FC<{ open: boolean; onClose: () => void; account: 
       uid: account.uid,
       accountType: form.accountType,
       url: form.url,
+      yingHuaUrls: form.yingHuaUrls.filter(row => row.url.trim()),
       remarkName: form.remarkName,
       account: form.account,
       password: form.password,

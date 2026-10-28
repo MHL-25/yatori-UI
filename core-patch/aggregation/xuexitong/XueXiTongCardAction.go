@@ -387,7 +387,7 @@ func ParseWorkQuestionAction(cache *xuexitong.XueXiTUserCache, workPoint *xuexit
 	// 使用 goquery 解析 HTML
 	doc, err := goquery.NewDocumentFromReader(bytes.NewReader([]byte(question)))
 	if err != nil {
-		log.Fatal(err)
+		return questionEntity, fmt.Errorf("作业题目页面解析失败: %v", err)
 	}
 
 	//用于拉取并完善workPointDto信息
@@ -417,7 +417,8 @@ func ParseWorkQuestionAction(cache *xuexitong.XueXiTUserCache, workPoint *xuexit
 	for _, qs := range questionSets {
 		qdoc, err := goquery.NewDocumentFromReader(bytes.NewReader([]byte(qs.HTML)))
 		if err != nil {
-			log.Fatal(err)
+			log.Print("单题页面解析失败，已跳过: ", err)
+			continue
 		}
 
 		// 提取题目类型和题目文本

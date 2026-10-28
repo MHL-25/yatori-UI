@@ -3,7 +3,6 @@ package xuexitong
 import (
 	"encoding/json"
 	"fmt"
-	log2 "log"
 	"regexp"
 	"strconv"
 	"strings"
@@ -346,7 +345,9 @@ func GetXXTAIAnswer(as AnswerSetter, cache *XueXiTUserCache, classId, courseId, 
 
 	aiAnswer, err := cache.XueXiTongAIAggregation(classId, courseId, cpi, aiChatMessages)
 	if err != nil {
-		panic(err)
+		log.Print(log.INFO, `[`, cache.Name, `] `, log.BoldRed, "学习通内置AI异常，返回信息：", err.Error())
+		as.SetAnswers([]string{"A"})
+		return
 	}
 	answers := aiq.ParseStringArray(aiAnswer)
 	if len(answers) == 0 {
@@ -380,7 +381,8 @@ func (q *ChoiceQue) AnswerExternalGet(exUrl string) {
 	}
 	request, err := external.ApiQueRequest(question, exUrl, 5, nil)
 	if err != nil {
-		log2.Fatal(err)
+		log.Print(log.INFO, "外置题库请求失败，已跳过本题:", err.Error())
+		return
 	}
 	//赋值答案
 	var answers []string
@@ -420,7 +422,8 @@ func (q *JudgeQue) AnswerExternalGet(exUrl string) {
 	}
 	request, err := external.ApiQueRequest(question, exUrl, 5, nil)
 	if err != nil {
-		log2.Fatal(err)
+		log.Print(log.INFO, "外置题库请求失败，已跳过本题:", err.Error())
+		return
 	}
 	if request.Code == 404 {
 		log.Print(log.INFO, "外置题库未找到答案，已使用默认答案：正确:", fmt.Sprintf("题目：%v \n外置题库回复： %v", q, request))
@@ -457,7 +460,8 @@ func (q *FillQue) AnswerExternalGet(exUrl string) {
 
 	request, err := external.ApiQueRequest(question, exUrl, 5, nil)
 	if err != nil {
-		log2.Fatal(err)
+		log.Print(log.INFO, "外置题库请求失败，已跳过本题:", err.Error())
+		return
 	}
 	if request.Code == 404 {
 		log.Print(log.INFO, "外置题库未找到答案，已自动留空", fmt.Sprintf("题目：%v \n外置题库回复： %v", q, request))
@@ -489,7 +493,8 @@ func (q *ShortQue) AnswerExternalGet(exUrl string) {
 	//赋值选项
 	request, err := external.ApiQueRequest(question, exUrl, 5, nil)
 	if err != nil {
-		log2.Fatal(err)
+		log.Print(log.INFO, "外置题库请求失败，已跳过本题:", err.Error())
+		return
 	}
 	var answers []string
 	if request.Question.Answers == nil {
@@ -520,7 +525,8 @@ func (q *TermExplanationQue) AnswerExternalGet(exUrl string) {
 	//赋值选项
 	request, err := external.ApiQueRequest(question, exUrl, 5, nil)
 	if err != nil {
-		log2.Fatal(err)
+		log.Print(log.INFO, "外置题库请求失败，已跳过本题:", err.Error())
+		return
 	}
 	//处理回复为空的情况
 	if len(request.Question.Answers) == 0 {
@@ -550,7 +556,8 @@ func (q *EssayQue) AnswerExternalGet(exUrl string) {
 	//赋值选项
 	request, err := external.ApiQueRequest(question, exUrl, 5, nil)
 	if err != nil {
-		log2.Fatal(err)
+		log.Print(log.INFO, "外置题库请求失败，已跳过本题:", err.Error())
+		return
 	}
 
 	//处理回复为空的情况
@@ -639,7 +646,8 @@ func (q *MatchingQue) AnswerExternalGet(exUrl string) {
 	//赋值选项
 	request, err := external.ApiQueRequest(question, exUrl, 5, nil)
 	if err != nil {
-		log2.Fatal(err)
+		log.Print(log.INFO, "外置题库请求失败，已跳过本题:", err.Error())
+		return
 	}
 	//赋值答案
 	q.SetAnswers(request.Question.Answers)
@@ -664,7 +672,8 @@ func (q *OtherQue) AnswerExternalGet(exUrl string) {
 	//赋值选项
 	request, err := external.ApiQueRequest(question, exUrl, 5, nil)
 	if err != nil {
-		log2.Fatal(err)
+		log.Print(log.INFO, "外置题库请求失败，已跳过本题:", err.Error())
+		return
 	}
 	//赋值答案
 	q.SetAnswers(request.Question.Answers)

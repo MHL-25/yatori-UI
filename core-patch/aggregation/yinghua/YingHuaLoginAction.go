@@ -9,7 +9,6 @@ import (
 	yinghuaApi "github.com/yatori-dev/yatori-go-core/api/yinghua"
 	"github.com/yatori-dev/yatori-go-core/utils"
 	"github.com/yatori-dev/yatori-go-core/utils/log"
-	"os"
 	"strings"
 )
 
@@ -63,8 +62,8 @@ func LoginTimeoutAfreshAction(cache *yinghuaApi.YingHuaUserCache, backJson strin
 	log.Print(log.INFO, "["+cache.Account+"] ", log.BoldRed, "检测到登录超时，正在进行重新登录逻辑...")
 	err := YingHuaLoginAction(cache)
 	if err != nil {
-		log.Print(log.INFO, "["+cache.Account+"] ", log.BoldRed, "超时重登失败")
-		os.Exit(0)
+		log.Print(log.INFO, "["+cache.Account+"] ", log.BoldRed, "超时重登失败，等待下次任务重试")
+		return
 	}
 	log.Print(log.INFO, "["+cache.Account+"] ", log.BoldGreen, "超时重登成功")
 }

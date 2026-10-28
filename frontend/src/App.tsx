@@ -16,7 +16,7 @@ import { EventsOn } from '../wailsjs/runtime/runtime'
 import { IsDisclaimerAccepted, AcceptDisclaimer, GetDonatePrompt, DisableDonatePrompt } from '../wailsjs/go/main/App'
 
 const App: React.FC = () => {
-  const { currentPage, fetchAccounts, fetchProgress, updateProgress, addLog } = useAppStore()
+  const { currentPage, fetchAccounts, fetchProgress, updateProgress, addLogs } = useAppStore()
   const [disclaimerAccepted, setDisclaimerAccepted] = useState<boolean | null>(null)
   const [sponsorCount, setSponsorCount] = useState<number | null>(null)
 
@@ -63,24 +63,47 @@ const App: React.FC = () => {
       fetchAccounts()
     }, 3000)
 
-    EventsOn('monitor:update', (data: string) => {
+    // 日志与进度先进入缓冲区，每 100ms 合并刷新一次，避免多账号高频事件导致界面卡顿
+    const pendingLogs = new Map<string, string[]>()
+    const pendingProgress = new Map<string, any>()
+    const flushTimer = setInterval(() => {
+      if (pendingProgress.size > 0) {
+        pendingProgress.forEach((p, uid) => updateProgress({ ...p, uid }))
+        pendingProgress.clear()
+      }
+      if (pendingLogs.size > 0) {
+        pendingLogs.forEach((logs, uid) => addLogs(uid, logs))
+        pendingLogs.clear()
+      }
+    }, 100)
+
+    const offMonitor = EventsOn('monitor:update', (data: string) => {
       try {
         const parsed = JSON.parse(data)
         if (parsed.event === 'log_update' && parsed.data) {
-          addLog(parsed.data.uid, parsed.data.log)
+          const uid = parsed.data.uid as string
+          const list = pendingLogs.get(uid) || []
+          list.push(parsed.data.log)
+          if (list.length > 200) list.splice(0, list.length - 200)
+          pendingLogs.set(uid, list)
         } else if (parsed.event === 'progress_update' && parsed.data) {
-          updateProgress(parsed.data)
+          pendingProgress.set(parsed.data.uid, parsed.data)
         }
       } catch (e) {
         console.error('Event parse error:', e)
       }
     })
 
-    EventsOn('config:reloaded', () => {
+    const offConfig = EventsOn('config:reloaded', () => {
       fetchAccounts()
     })
 
-    return () => { clearInterval(interval) }
+    return () => {
+      clearInterval(interval)
+      clearInterval(flushTimer)
+      offMonitor()
+      offConfig()
+    }
   }, [disclaimerAccepted])
 
   if (disclaimerAccepted === null) {

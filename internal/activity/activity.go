@@ -7,6 +7,7 @@ import (
 	"math/rand"
 	"net/http"
 	"regexp"
+	"runtime/debug"
 	"strconv"
 	"strings"
 	"sync"
@@ -14,11 +15,12 @@ import (
 
 	"yatori-UI/internal/config"
 	"yatori-UI/internal/dao"
-	"yatori-UI/internal/entity"
 	"yatori-UI/internal/email"
+	"yatori-UI/internal/entity"
 	"yatori-UI/internal/monitor"
 	"yatori-UI/internal/notify"
 	"yatori-UI/internal/studyplan"
+	"yatori-UI/internal/yinghuahelper"
 
 	"github.com/thedevsaddam/gojsonq"
 	"github.com/yatori-dev/yatori-go-core/aggregation/cqie"
@@ -123,10 +125,22 @@ func (u *UserActivityBase) sendCompletionEmail() {
 	platformName := config.PlatformNames[user.AccountType]
 	content := fmt.Sprintf("账号：[%s]</br>平台：[%s]</br>通知：所有课程已执行完毕", user.Account, platformName)
 	if setting.EmailInform.Sw == 1 && len(user.InformEmails) > 0 {
-		go email.SendMail(setting.EmailInform.SMTPHost, setting.EmailInform.SMTPPort, setting.EmailInform.UserName, setting.EmailInform.Password, user.InformEmails, content)
+		go func() {
+			defer func() {
+				if r := recover(); r != nil {
+					monitor.GlobalEventBus.AddLog(u.Uid, fmt.Sprintf("⚠️ 邮件通知异常: %v", r))
+				}
+			}()
+			email.SendMail(setting.EmailInform.SMTPHost, setting.EmailInform.SMTPPort, setting.EmailInform.UserName, setting.EmailInform.Password, user.InformEmails, content)
+		}()
 	}
 	if user.ShowDocSw == 1 && len(user.ShowDocUrls) > 0 {
 		go func() {
+			defer func() {
+				if r := recover(); r != nil {
+					monitor.GlobalEventBus.AddLog(u.Uid, fmt.Sprintf("⚠️ ShowDoc 推送异常: %v", r))
+				}
+			}()
 			if err := notify.SendShowDoc(user.ShowDocUrls, "Yatori课程助手通知", content); err != nil {
 				monitor.GlobalEventBus.AddLog(u.Uid, "⚠️ ShowDoc 推送失败: "+err.Error())
 			}
@@ -246,7 +260,11 @@ func (a *XXTActivity) run() {
 	defer func() {
 		a.setRunning(false)
 		if r := recover(); r != nil {
-			monitor.GlobalEventBus.SetError(a.Uid, fmt.Sprintf("Panic: %v", r))
+			stack := string(debug.Stack())
+			if len(stack) > 1800 {
+				stack = stack[:1800] + "..."
+			}
+			monitor.GlobalEventBus.SetError(a.Uid, fmt.Sprintf("Panic: %v\n%s", r, stack))
 			return
 		}
 		if a.isPaused() {
@@ -303,7 +321,7 @@ func (a *XXTActivity) run() {
 			if course.JobRate >= 100 || course.State == 1 || !course.IsStart {
 				continue
 			}
-			if s, err := a.scanCourse(cache, &course); err != nil {
+			if s, err := a.safeScanCourse(cache, &course); err != nil {
 				monitor.GlobalEventBus.AddLog(a.Uid, "⚠️ 预扫描失败: "+course.CourseName+" - "+err.Error())
 			} else {
 				scans[course.CourseID] = s
@@ -323,17 +341,27 @@ func (a *XXTActivity) run() {
 				nodesLock.Add(1)
 				go func(course xuexitong.XueXiTCourse, scan *courseScan) {
 					defer nodesLock.Done()
+					defer func() {
+						if r := recover(); r != nil {
+							monitor.GlobalEventBus.AddLog(a.Uid, fmt.Sprintf("💥 课程 [%s] 异常: %v", course.CourseName, r))
+						}
+					}()
 					a.courseStudyWithScan(&course, scan)
 				}(course, s)
 				continue
 			}
-			a.courseStudy(&course)
+			a.safeCourseStudy(&course)
 		} else if user.CoursesCustom.VideoModel == 1 {
-			a.courseStudy(&course)
+			a.safeCourseStudy(&course)
 		} else {
 			nodesLock.Add(1)
 			go func(course xuexitong.XueXiTCourse) {
 				defer nodesLock.Done()
+				defer func() {
+					if r := recover(); r != nil {
+						monitor.GlobalEventBus.AddLog(a.Uid, fmt.Sprintf("💥 课程 [%s] 异常: %v", course.CourseName, r))
+					}
+				}()
 				a.courseStudy(&course)
 			}(course)
 		}
@@ -347,6 +375,17 @@ type courseScan struct {
 	chapters xuexitong.ChaptersList
 	points   xuexitong.ChaptersList
 	plans    []studyplan.NodePlan
+}
+
+// safeScanCourse 预扫描异常时按普通错误处理，避免中断整个账号
+func (a *XXTActivity) safeScanCourse(cache *xuexitongApi.XueXiTUserCache, courseItem *xuexitong.XueXiTCourse) (scan *courseScan, err error) {
+	defer func() {
+		if r := recover(); r != nil {
+			scan = nil
+			err = fmt.Errorf("扫描异常: %v", r)
+		}
+	}()
+	return a.scanCourse(cache, courseItem)
 }
 
 // scanCourse 拉取课程章节与任务点状态并分析锁类型
@@ -380,6 +419,16 @@ func (a *XXTActivity) scanCourse(cache *xuexitongApi.XueXiTUserCache, courseItem
 
 func (a *XXTActivity) courseStudy(courseItem *xuexitong.XueXiTCourse) bool {
 	return a.courseStudyWithScan(courseItem, nil)
+}
+
+// safeCourseStudy 单门课程异常只跳过该课程，不终止整个账号任务
+func (a *XXTActivity) safeCourseStudy(courseItem *xuexitong.XueXiTCourse) {
+	defer func() {
+		if r := recover(); r != nil {
+			monitor.GlobalEventBus.AddLog(a.Uid, fmt.Sprintf("💥 课程 [%s] 异常，已跳过: %v", courseItem.CourseName, r))
+		}
+	}()
+	a.courseStudy(courseItem)
 }
 
 func (a *XXTActivity) courseStudyWithScan(courseItem *xuexitong.XueXiTCourse, scan *courseScan) bool {
@@ -1001,9 +1050,14 @@ func (a *XXTActivity) studyNodesSerial(setting config.Setting, cache *xuexitongA
 	}
 }
 
-
 func (a *XXTActivity) nodeRun(setting config.Setting, cache *xuexitongApi.XueXiTUserCache, courseItem *xuexitong.XueXiTCourse,
 	pointAction xuexitong.ChaptersList, action xuexitong.ChaptersList, nodes []int, index int, key int, courseId int) {
+
+	// 章节任务点状态偶尔会因并发/限流返回空列表，这里用节点 ID 兜底，避免索引越界
+	chapterInfo := xuexitong.KnowledgeItem{ID: nodes[index]}
+	if index >= 0 && index < len(pointAction.Knowledge) {
+		chapterInfo = pointAction.Knowledge[index]
+	}
 
 	_, fetchCards, err1 := xuexitong.ChapterFetchCardsAction(cache, &action, nodes, index, courseId, key, courseItem.Cpi)
 	if err1 != nil {
@@ -1057,9 +1111,9 @@ func (a *XXTActivity) nodeRun(setting config.Setting, cache *xuexitongApi.XueXiT
 			}
 			monitor.GlobalEventBus.AddLog(a.Uid, fmt.Sprintf("🎬 开始观看视频: %s (%d/%ds)", videoDTO.Title, videoDTO.PlayTime, videoDTO.Duration))
 			if videoDTO.Type == ctype.Video {
-				a.executeVideo(cache, courseItem, pointAction.Knowledge[index], videoDTO, key, courseItem.Cpi)
+				a.executeVideo(cache, courseItem, chapterInfo, videoDTO, key, courseItem.Cpi)
 			} else if videoDTO.Type == ctype.InsertAudio {
-				a.executeAudio(cache, courseItem, pointAction.Knowledge[index], videoDTO, key, courseItem.Cpi)
+				a.executeAudio(cache, courseItem, chapterInfo, videoDTO, key, courseItem.Cpi)
 			}
 			randSleepTime := rand.Intn(51) + 10
 			time.Sleep(time.Duration(randSleepTime) * time.Second)
@@ -1133,7 +1187,7 @@ func (a *XXTActivity) nodeRun(setting config.Setting, cache *xuexitongApi.XueXiT
 				monitor.GlobalEventBus.AddLog(a.Uid, "⏭️ 作业无题目，跳过: "+questionAction.Title)
 				continue
 			}
-			a.chapterTestAction(cache, questionAction, courseItem, pointAction.Knowledge[index])
+			a.chapterTestAction(cache, questionAction, courseItem, chapterInfo)
 		}
 	}
 
@@ -1841,6 +1895,9 @@ func checkAnswerIsAvoid(choices []xuexitongApi.ChoiceQue, judges []xuexitongApi.
 			}
 			for _, answer := range choice.Answers {
 				var sortArray []qutils.Co = qutils.SimilarityArrayAndSort(answer, candidateSelects)
+				if len(sortArray) == 0 {
+					continue
+				}
 				if sortArray[0].Score >= 0.9 {
 					resStatus = false
 				}
@@ -1889,22 +1946,20 @@ type YingHuaActivity struct {
 }
 
 func (a *YingHuaActivity) Login() error {
-	cache := &yinghuaApi.YingHuaUserCache{PreUrl: a.User.URL, Account: a.User.Account, Password: a.User.Password}
-	if a.User.IsProxy == 1 {
-		cache.IpProxySW = true
+	caches, failures := yinghuahelper.LoginAccount(a.User.Account, a.User)
+	for _, failure := range failures {
+		monitor.GlobalEventBus.AddLog(a.Uid, "⚠️ "+failure)
 	}
-	var err1 error
-	if yinghua.IsYingHuaCookieOrToken(a.User.Password) {
-		err1 = yinghua.YingHuaCookieLoginAction(cache)
-	} else {
-		err1 = yinghua.YingHuaLoginAction(cache)
+	if len(caches) == 0 {
+		msg := "❌ 登录失败: 所有英华平台均未登录成功"
+		if len(failures) > 0 {
+			msg += "（" + failures[0] + "）"
+		}
+		monitor.GlobalEventBus.SetError(a.Uid, msg)
+		return fmt.Errorf("%s", msg)
 	}
-	if err1 != nil {
-		monitor.GlobalEventBus.SetError(a.Uid, "❌ 登录失败: "+err1.Error())
-		return err1
-	}
-	a.UserCache = cache
-	monitor.GlobalEventBus.AddLog(a.Uid, "🔑 登录成功: "+cache.Account)
+	a.UserCache = caches
+	monitor.GlobalEventBus.AddLog(a.Uid, fmt.Sprintf("🔑 登录成功: %s（%d 个平台）", a.User.Account, len(caches)))
 	return nil
 }
 
@@ -1956,32 +2011,79 @@ func (a *YingHuaActivity) run() {
 		}
 	}
 
-	cache := a.UserCache.(*yinghuaApi.YingHuaUserCache)
+	caches := a.UserCache.([]*yinghuaApi.YingHuaUserCache)
 
-	go func() {
-		ticker := time.NewTicker(5 * time.Minute)
-		defer ticker.Stop()
-		for range ticker.C {
+	type platformCourses struct {
+		cache   *yinghuaApi.YingHuaUserCache
+		host    string
+		courses []yinghua.YingHuaCourse
+	}
+	loadPlatforms := func(caches []*yinghuaApi.YingHuaUserCache) ([]platformCourses, int) {
+		platforms := make([]platformCourses, 0, len(caches))
+		total := 0
+		for _, cache := range caches {
+			host := yinghuahelper.Host(cache.PreUrl)
+			list, err := yinghua.CourseListAction(cache)
+			if err != nil {
+				monitor.GlobalEventBus.AddLog(a.Uid, fmt.Sprintf("⚠️ [%s] 拉取课程失败: %v", host, err))
+				continue
+			}
+			platforms = append(platforms, platformCourses{cache: cache, host: host, courses: list})
+			total += len(list)
+			monitor.GlobalEventBus.AddLog(a.Uid, fmt.Sprintf("📚 [%s] 获取到 %d 门课程", host, len(list)))
+		}
+		return platforms, total
+	}
+
+	platforms, totalCourses := loadPlatforms(caches)
+	if len(platforms) == 0 {
+		// 复用旧会话失败（Cookie/Token 过期）时，自动重新登录并重新抓取 Cookie
+		monitor.GlobalEventBus.AddLog(a.Uid, "⚠️ 所有平台课程拉取失败，正在重新登录并抓取新 Cookie...")
+		if err := a.Login(); err == nil {
+			caches = a.UserCache.([]*yinghuaApi.YingHuaUserCache)
+			platforms, totalCourses = loadPlatforms(caches)
+		}
+	}
+	if len(platforms) == 0 {
+		monitor.GlobalEventBus.SetError(a.Uid, "❌ 所有英华平台均无法拉取课程，请检查账号密码或平台URL")
+		return
+	}
+
+	for _, cache := range caches {
+		cache := cache
+		host := yinghuahelper.Host(cache.PreUrl)
+		go func() {
+			defer func() {
+				if r := recover(); r != nil {
+					monitor.GlobalEventBus.AddLog(a.Uid, fmt.Sprintf("⚠️ 英华保活任务异常[%s]: %v", host, r))
+				}
+			}()
+			ticker := time.NewTicker(5 * time.Minute)
+			defer ticker.Stop()
+			for range ticker.C {
+				if !a.IsRunning() {
+					return
+				}
+				yinghuaApi.KeepAliveApi(*cache, 8)
+			}
+		}()
+	}
+
+	monitor.GlobalEventBus.UpdateCourseProgress(a.Uid, 0, totalCourses)
+
+	doneCourses := 0
+	for _, platform := range platforms {
+		for i := range platform.courses {
 			if !a.IsRunning() {
 				return
 			}
-			yinghuaApi.KeepAliveApi(*cache, 8)
+			course := platform.courses[i]
+			monitor.GlobalEventBus.UpdateProgress(a.Uid, float64(doneCourses)/float64(totalCourses)*100, "正在学习: "+course.Name)
+			monitor.GlobalEventBus.UpdateCourseProgress(a.Uid, doneCourses, totalCourses)
+			a.nodeListStudy(platform.cache, &course)
+			doneCourses++
+			monitor.GlobalEventBus.UpdateCourseProgress(a.Uid, doneCourses, totalCourses)
 		}
-	}()
-
-	list, _ := yinghua.CourseListAction(cache)
-	totalCourses := len(list)
-	monitor.GlobalEventBus.UpdateCourseProgress(a.Uid, 0, totalCourses)
-	monitor.GlobalEventBus.AddLog(a.Uid, fmt.Sprintf("获取到 %d 门课程", totalCourses))
-
-	for i, course := range list {
-		if !a.IsRunning() {
-			return
-		}
-		monitor.GlobalEventBus.UpdateProgress(a.Uid, float64(i)/float64(totalCourses)*100, "正在学习: "+course.Name)
-		monitor.GlobalEventBus.UpdateCourseProgress(a.Uid, i, totalCourses)
-		a.nodeListStudy(cache, &course)
-		monitor.GlobalEventBus.UpdateCourseProgress(a.Uid, i+1, totalCourses)
 	}
 }
 
@@ -3328,6 +3430,11 @@ func (a *HqkjActivity) fastModeAction(cache *hqkjApi.HqkjUserCache, course *haiq
 		videosLock.Add(1)
 		go func(node haiqikeji.HqkjNode) {
 			defer videosLock.Done()
+			defer func() {
+				if r := recover(); r != nil {
+					monitor.GlobalEventBus.AddLog(a.Uid, fmt.Sprintf("💥 海旗节点异常: %v", r))
+				}
+			}()
 			progress, err := haiqikeji.HqkjGetNodeProgressAction(cache, node)
 			if err != nil {
 				monitor.GlobalEventBus.AddLog(a.Uid, "拉取进度错误: "+err.Error())

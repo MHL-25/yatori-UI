@@ -151,6 +151,9 @@ func (cache *XueXiTUserCache) WorkNewSubmitAnswer(courseId string, classId strin
 			answerwqbid += ch.Qid + ","
 		}
 		for _, v := range ch.OpFromAnswer {
+			if len(v) == 0 {
+				continue
+			}
 			_ = writer.WriteField("answer"+ch.Qid, v[0])
 		}
 		_ = writer.WriteField("answertype"+ch.Qid, "4")
@@ -161,6 +164,9 @@ func (cache *XueXiTUserCache) WorkNewSubmitAnswer(courseId string, classId strin
 			answerwqbid += ch.Qid + ","
 		}
 		for _, v := range ch.OpFromAnswer {
+			if len(v) == 0 {
+				continue
+			}
 			_ = writer.WriteField("answer"+ch.Qid, v[0])
 		}
 		_ = writer.WriteField("answertype"+ch.Qid, "5")
@@ -171,6 +177,9 @@ func (cache *XueXiTUserCache) WorkNewSubmitAnswer(courseId string, classId strin
 			answerwqbid += ch.Qid + ","
 		}
 		for _, v := range ch.OpFromAnswer {
+			if len(v) == 0 {
+				continue
+			}
 			_ = writer.WriteField("answer"+ch.Qid, v[0])
 		}
 		_ = writer.WriteField("answertype"+ch.Qid, "6")
@@ -190,6 +199,9 @@ func (cache *XueXiTUserCache) WorkNewSubmitAnswer(courseId string, classId strin
 			answerwqbid += ch.Qid + ","
 		}
 		for _, v := range ch.OpFromAnswer {
+			if len(v) == 0 {
+				continue
+			}
 			_ = writer.WriteField("answer"+ch.Qid, v[0])
 		}
 		_ = writer.WriteField("answertype"+ch.Qid, "8")

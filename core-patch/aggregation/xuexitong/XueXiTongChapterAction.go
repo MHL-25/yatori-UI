@@ -120,7 +120,11 @@ func ChapterFetchCardsAction(
 		return []Card{}, nil, err
 	}
 	if len(apiResp.Data) == 0 {
-		log2.Print(log2.DEBUG, "获取章节任务节点卡片失败 [", chapters.Knowledge[index].Label, ":", chapters.Knowledge[index].Name, "(Id.", fmt.Sprintf("%d", chapters.Knowledge[index].ID), ")]")
+		if index >= 0 && index < len(chapters.Knowledge) {
+			log2.Print(log2.DEBUG, "获取章节任务节点卡片失败 [", chapters.Knowledge[index].Label, ":", chapters.Knowledge[index].Name, "(Id.", fmt.Sprintf("%d", chapters.Knowledge[index].ID), ")]")
+		} else {
+			log2.Print(log2.DEBUG, "获取章节任务节点卡片失败，章节数据为空")
+		}
 		return []Card{}, nil, err
 	}
 

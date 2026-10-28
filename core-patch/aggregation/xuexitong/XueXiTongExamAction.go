@@ -3,7 +3,6 @@ package xuexitong
 import (
 	"bytes"
 	"fmt"
-	"log"
 	"net/url"
 	"regexp"
 	"strconv"
@@ -88,7 +87,7 @@ func PullExamListAction(cache *xuexitong.XueXiTUserCache, course XueXiTCourse) (
 	}
 	doc, err := goquery.NewDocumentFromReader(strings.NewReader(examListHtml))
 	if err != nil {
-		log.Fatal(err)
+		return examList, fmt.Errorf("考试列表页面解析失败: %v", err)
 	}
 
 	// 遍历所有 <li>
@@ -146,16 +145,19 @@ func EnterExamAction(cache *xuexitong.XueXiTUserCache, exam *XXTExam) error {
 	}
 	doc, err := goquery.NewDocumentFromReader(strings.NewReader(enterHtml))
 	if err != nil {
-		log.Fatal(err)
+		return fmt.Errorf("考试进入页面解析失败: %v", err)
 	}
 	isReExam := false
 	//如果可以重考
 	if strings.Contains(enterHtml, `bnt_retake">重考</a>`) {
 		reExamUrl, _ := doc.Find("a.bnt_retake").Attr("data")
 		enterHtml, err = cache.PullReExamPaperHtmlApi(reExamUrl)
+		if err != nil {
+			return err
+		}
 		doc, err = goquery.NewDocumentFromReader(strings.NewReader(enterHtml))
 		if err != nil {
-			log.Fatal(err)
+			return fmt.Errorf("重考试卷页面解析失败: %v", err)
 		}
 		isReExam = true
 	}
@@ -368,7 +370,9 @@ func (question *XXTExamQuestion) WriteQuestionForExternalAction(exUrl string) {
 	//赋值选项
 	request, err := external.ApiQueRequest(question.Question, exUrl, 5, nil)
 	if err != nil {
-		log.Fatal(err)
+		log2.Print(log2.INFO, "外置题库请求失败，已使用默认答案A:", err.Error())
+		question.Question.Answers = []string{"A"}
+		return
 	}
 	//赋值答案
 	var answers []string
@@ -422,7 +426,7 @@ func HtmlQuestionTurnEntity(paperHtml string) (XXTExamQuestion, error) {
 	// 使用 goquery 解析 HTML
 	paperDoc, err := goquery.NewDocumentFromReader(bytes.NewReader([]byte(paperHtml)))
 	if err != nil {
-		log.Fatal(err)
+		return question, fmt.Errorf("考试题目页面解析失败: %v", err)
 	}
 	questionId, exists := paperDoc.Find("#questionId").Attr("value") //题目id
 	if exists {

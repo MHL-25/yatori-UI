@@ -110,13 +110,14 @@ interface AppStore {
   openCheckDetail: (uid: string) => void
   closeCheckDetail: () => void
   fetchCourseList: (uid: string) => Promise<{ ok: boolean; msg: string; courses: CourseBrief[] }>
-  queryCourseList: (data: { accountType: string; url: string; account: string; password: string }) => Promise<{ ok: boolean; msg: string; courses: CourseBrief[] }>
+  queryCourseList: (data: { accountType: string; url: string; account: string; password: string; yingHuaUrls?: { url: string; password?: string }[] }) => Promise<{ ok: boolean; msg: string; courses: CourseBrief[] }>
   fetchProgress: () => Promise<void>
   fetchConfig: () => Promise<void>
   saveConfig: (cfg: any) => Promise<{ ok: boolean; msg: string }>
   importConfig: () => Promise<{ ok: boolean; msg: string; count: number }>
   updateProgress: (data: TaskProgress) => void
   addLog: (uid: string, log: string) => void
+  addLogs: (uid: string, logs: string[]) => void
 }
 
 export const useAppStore = create<AppStore>((set, get) => ({
@@ -455,6 +456,19 @@ export const useAppStore = create<AppStore>((set, get) => ({
       const existing = s.progressMap[uid]
       if (!existing) return s
       const logs = [...(existing.logs || []), log]
+      if (logs.length > 200) logs.splice(0, logs.length - 200)
+      return {
+        progressMap: { ...s.progressMap, [uid]: { ...existing, logs } }
+      }
+    })
+  },
+
+  addLogs: (uid: string, newLogs: string[]) => {
+    if (!newLogs.length) return
+    set((s) => {
+      const existing = s.progressMap[uid]
+      if (!existing) return s
+      const logs = [...(existing.logs || []), ...newLogs]
       if (logs.length > 200) logs.splice(0, logs.length - 200)
       return {
         progressMap: { ...s.progressMap, [uid]: { ...existing, logs } }
